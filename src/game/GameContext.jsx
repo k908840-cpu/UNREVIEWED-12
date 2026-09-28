@@ -66,6 +66,24 @@ export function GameProvider({ children }) {
     setLeftReason(null); setPhase("landing");
   }, []);
 
+  // Fetch the complete authoritative player roster for the current room.
+  // RoomPlayer is intentionally not made globally readable for anonymous clients.
+  const refreshPlayers = useCallback(async () => {
+    if (!roomCode) return;
+    try {
+      const res = await base44.functions.invoke("room", { action: "getRoster", code: roomCode, sessionId });
+      const data = res?.data || {};
+      if (data.error) {
+        if (data.error === "not_in_room" && seenSelfRef.current) setLeftReason("removed");
+        return;
+      }
+      const mapped = (data.players || []).map((rp) => mapPlayer(rp, sessionId));
+      if (mapped.some((p) => p.isYou)) seenSelfRef.current = true;
+      else if (seenSelfRef.current) setLeftReason("removed");
+      setPlayers(mapped);
+    } catch { /* transient */ }
+  }, [roomCode, sessionId]);
+
   // ---- lobby actions (unchanged) ----
   const createRoom = useCallback(async () => {
     const res = await base44.functions.invoke("room", { action: "create", sessionId, mode, length });
@@ -115,11 +133,12 @@ export function GameProvider({ children }) {
       setActiveRoomCode(roomCode);
       seenSelfRef.current = false;
       setPhase("lobby");
+      refreshPlayers();
       return { ok: true };
     } catch (e) {
       throw new Error(e?.response?.data?.error || e?.message || "join_failed");
     }
-  }, [sessionId, roomCode, isHost]);
+  }, [sessionId, roomCode, isHost, refreshPlayers]);
 
   const persistConfig = useCallback(async (m, l) => {
     if (!roomCode || !isHost) return;
@@ -144,19 +163,6 @@ export function GameProvider({ children }) {
   }, [roomCode, sessionId, resetRoomState]);
 
   const acknowledgeLeft = useCallback(() => resetRoomState(), [resetRoomState]);
-
-  // Fetch the complete authoritative player roster for the current room.
-  // Lifted to a callback so multiple effects can ensure players are hydrated.
-  const refreshPlayers = useCallback(async () => {
-    if (!roomCode) return;
-    try {
-      const list = await base44.entities.RoomPlayer.filter({ room_code: roomCode });
-      const mapped = (list || []).map((rp) => mapPlayer(rp, sessionId));
-      if (mapped.some((p) => p.isYou)) seenSelfRef.current = true;
-      else if (seenSelfRef.current) setLeftReason("removed");
-      setPlayers(mapped);
-    } catch { /* transient */ }
-  }, [roomCode, sessionId]);
 
   // ---- game actions (all validated server-side) ----
   const callRoom = useCallback(async (action, extra = {}) => {
@@ -242,12 +248,14 @@ export function GameProvider({ children }) {
     const beat = () => base44.functions.invoke("room", { action: "heartbeat", code: roomCode, sessionId }).catch(() => {});
     beat();
     const beatTimer = setInterval(beat, 5000);
+    const rosterTimer = setInterval(refreshPlayers, 5000);
 
     return () => {
       active = false;
       if (typeof unsubPlayers === "function") unsubPlayers();
       if (typeof unsubRoom === "function") unsubRoom();
       clearInterval(beatTimer);
+      clearInterval(rosterTimer);
     };
   }, [roomCode, sessionId, refreshPlayers]);
 
@@ -302,8 +310,10 @@ export function GameProvider({ children }) {
         const res = await base44.functions.invoke("room", { action: "lookup", code, sessionId });
         const existing = res?.data?.room;
         if (!existing || existing.status === "closed") { clearActiveRoom(); return; }
-        const list = await base44.entities.RoomPlayer.filter({ room_code: code });
-        const mine = (list || []).find((p) => p.session_id === sessionId);
+        const roster = await base44.functions.invoke("room", { action: "getRoster", code, sessionId });
+        const data = roster?.data || {};
+        if (data.error) { clearActiveRoom(); return; }
+        const mine = (data.players || []).find((p) => p.session_id === sessionId);
         if (!mine) { clearActiveRoom(); return; }
         setRoom(existing); setRoomCode(code); setMode(existing.mode); setLength(existing.length);
         setIsHost(existing.host_session === sessionId);

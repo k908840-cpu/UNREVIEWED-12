@@ -4,6 +4,16 @@ import { PHASE_DURATIONS, LENGTH_CYCLES, buildSubjectOrder, selectPrompt, tryAdv
 
 const LENGTHS = ['quick', 'standard', 'party', 'endless'];
 const rid = () => Math.random().toString(36).slice(2, 9);
+const rosterPlayer = (player: any) => ({
+  id: player.id,
+  session_id: player.session_id,
+  nickname: player.nickname,
+  avatar_id: player.avatar_id,
+  photo_url: player.photo_url,
+  is_host: !!player.is_host,
+  connected: !!player.connected,
+  last_seen: player.last_seen,
+});
 
 // Authoritative room + game endpoint. Clients never write room/player records
 // directly; every mutation is validated here against the caller's session id
@@ -55,6 +65,17 @@ export default async function (req) {
         if (room.status === 'closed') return Response.json({ error: 'closed' }, { status: 410 });
         const players = await playersOf(room.code);
         return Response.json({ room, active_count: activePlayers(players, now).length });
+      }
+
+      case 'getRoster': {
+        const room = await findRoom(body.code);
+        if (!room) return Response.json({ error: 'not_found' }, { status: 404 });
+        if (room.status === 'closed') return Response.json({ error: 'closed' }, { status: 410 });
+        const players = await playersOf(room.code);
+        if (!players.some((player) => player.session_id === sessionId)) {
+          return Response.json({ error: 'not_in_room' }, { status: 403 });
+        }
+        return Response.json({ players: players.map(rosterPlayer) });
       }
 
       case 'join': {
