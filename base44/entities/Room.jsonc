@@ -1,0 +1,68 @@
+{
+  "name": "Room",
+  "type": "object",
+  "properties": {
+    "code": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "lobby",
+        "playing",
+        "closed"
+      ],
+      "default": "lobby"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "family",
+        "adult"
+      ],
+      "default": "family"
+    },
+    "length": {
+      "type": "string",
+      "enum": [
+        "quick",
+        "standard",
+        "party",
+        "endless"
+      ],
+      "default": "standard"
+    },
+    "host_session": {
+      "type": "string"
+    },
+    "max_players": {
+      "type": "integer",
+      "default": 8
+    },
+    "game_state": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "code",
+    "host_session"
+  ],
+  "rls": {
+    "read": {},
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

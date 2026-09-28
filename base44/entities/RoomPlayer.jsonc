@@ -1,0 +1,54 @@
+{
+  "name": "RoomPlayer",
+  "type": "object",
+  "properties": {
+    "room_code": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "nickname": {
+      "type": "string"
+    },
+    "avatar_id": {
+      "type": "string"
+    },
+    "photo_url": {
+      "type": "string"
+    },
+    "is_host": {
+      "type": "boolean",
+      "default": false
+    },
+    "connected": {
+      "type": "boolean",
+      "default": true
+    },
+    "last_seen": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "room_code",
+    "session_id"
+  ],
+  "rls": {
+    "read": {},
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

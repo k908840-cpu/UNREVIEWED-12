@@ -1,0 +1,63 @@
+{
+  "name": "Prompt",
+  "type": "object",
+  "properties": {
+    "prompt_key": {
+      "type": "string"
+    },
+    "text": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "family",
+        "adult"
+      ]
+    },
+    "category": {
+      "type": "string"
+    },
+    "format": {
+      "type": "string"
+    },
+    "active": {
+      "type": "boolean",
+      "default": true
+    },
+    "times_played": {
+      "type": "integer",
+      "default": 0
+    },
+    "avg_answer_rating": {
+      "type": "number",
+      "default": 0
+    },
+    "rating_count": {
+      "type": "integer",
+      "default": 0
+    }
+  },
+  "required": [
+    "text",
+    "mode"
+  ],
+  "rls": {
+    "read": {},
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}
