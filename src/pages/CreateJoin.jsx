@@ -18,6 +18,7 @@ export default function CreateJoin() {
     closed: "That room has already ended",
     in_progress: "That game already started",
     full: "That room is full",
+    rate_limited: "Server is busy. Try again in a moment.",
   };
 
   const handleCreate = async () => {

@@ -8,6 +8,20 @@ import { getSessionId, getActiveRoomCode, setActiveRoomCode, clearActiveRoom } f
 const GameContext = createContext(null);
 
 const FRESH_MS = 30000;
+// Heartbeat interval — presence-only, safely inside the 30s active threshold.
+const HEARTBEAT_MS = 20000;
+// Debounce window for coalescing bursts of realtime events into one getRoster.
+const ROSTER_DEBOUNCE_MS = 400;
+// Exponential backoff for rate-limit errors (ms).
+const BACKOFF_BASE_MS = 2000;
+const BACKOFF_MAX_MS = 30000;
+
+// Detects rate-limit errors in either response data or thrown SDK errors.
+// A rate-limit error must NEVER be treated as not_found/gone.
+const isRateLimited = (data, err) => {
+  const msg = (typeof data === "string" ? data : data?.error) || err?.response?.data?.error || err?.message || "";
+  return /rate limit/i.test(msg);
+};
 const rid = () => Math.random().toString(36).slice(2, 9);
 
 const GAME_PHASE_ROUTES = {
@@ -54,6 +68,15 @@ export function GameProvider({ children }) {
   const seenSelfRef = useRef(false);
   const prevStatusRef = useRef(null);
   const prevRoundRef = useRef(-1);
+  const playersRef = useRef([]);
+  const rosterDebounceRef = useRef(null);
+  const inFlightRosterRef = useRef(false);
+  const backoffRef = useRef(0);
+  const backoffTimerRef = useRef(null);
+  const fetchRosterRef = useRef(async () => {});
+
+  // Keep playersRef in sync for the realtime subscription's meaningful-change check.
+  useEffect(() => { playersRef.current = players; }, [players]);
 
   const setVolume = useCallback((v) => { setVol(v); setSfxVolume(v); }, []);
   const toggleMute = useCallback(() => setMutedState((m) => { const next = !m; setSfxMuted(next); return next; }), []);
@@ -61,28 +84,13 @@ export function GameProvider({ children }) {
   const resetRoomState = useCallback(() => {
     clearActiveRoom();
     seenSelfRef.current = false;
+    if (rosterDebounceRef.current) { clearTimeout(rosterDebounceRef.current); rosterDebounceRef.current = null; }
+    if (backoffTimerRef.current) { clearTimeout(backoffTimerRef.current); backoffTimerRef.current = null; }
+    backoffRef.current = 0; inFlightRosterRef.current = false;
     setRoomCode(""); setRoom(null); setIsHost(false); setPlayers([]);
     setYou({ nickname: "", photo: null, avatar: PRESET_AVATARS[0] });
     setLeftReason(null); setPhase("landing");
   }, []);
-
-  // Fetch the complete authoritative player roster for the current room.
-  // RoomPlayer is intentionally not made globally readable for anonymous clients.
-  const refreshPlayers = useCallback(async () => {
-    if (!roomCode) return;
-    try {
-      const res = await base44.functions.invoke("room", { action: "getRoster", code: roomCode, sessionId });
-      const data = res?.data || {};
-      if (data.error) {
-        if (data.error === "not_in_room" && seenSelfRef.current) setLeftReason("removed");
-        return;
-      }
-      const mapped = (data.players || []).map((rp) => mapPlayer(rp, sessionId));
-      if (mapped.some((p) => p.isYou)) seenSelfRef.current = true;
-      else if (seenSelfRef.current) setLeftReason("removed");
-      setPlayers(mapped);
-    } catch { /* transient */ }
-  }, [roomCode, sessionId]);
 
   // ---- lobby actions (unchanged) ----
   const createRoom = useCallback(async () => {
@@ -107,7 +115,8 @@ export function GameProvider({ children }) {
       setIsHost(data.room.host_session === sessionId);
       return { ok: true, room: data.room };
     } catch (e) {
-      return { error: e?.response?.data?.error || "not_found" };
+      if (isRateLimited(null, e)) return { error: "rate_limited" };
+      return { error: "not_found" };
     }
   }, [sessionId]);
 
@@ -133,12 +142,11 @@ export function GameProvider({ children }) {
       setActiveRoomCode(roomCode);
       seenSelfRef.current = false;
       setPhase("lobby");
-      refreshPlayers();
       return { ok: true };
     } catch (e) {
       throw new Error(e?.response?.data?.error || e?.message || "join_failed");
     }
-  }, [sessionId, roomCode, isHost, refreshPlayers]);
+  }, [sessionId, roomCode, isHost]);
 
   const persistConfig = useCallback(async (m, l) => {
     if (!roomCode || !isHost) return;
@@ -164,6 +172,62 @@ export function GameProvider({ children }) {
 
   const acknowledgeLeft = useCallback(() => resetRoomState(), [resetRoomState]);
 
+  // Immediate roster fetch with in-flight dedup + exponential backoff on
+  // rate-limit errors. Only genuine not_found / closed clear room state.
+  const fetchRoster = useCallback(async () => {
+    if (!roomCode) return;
+    if (inFlightRosterRef.current) return;
+    inFlightRosterRef.current = true;
+    const handleRateLimit = () => {
+      const next = Math.min(backoffRef.current === 0 ? BACKOFF_BASE_MS : backoffRef.current * 2, BACKOFF_MAX_MS);
+      backoffRef.current = next;
+      if (backoffTimerRef.current) clearTimeout(backoffTimerRef.current);
+      backoffTimerRef.current = setTimeout(() => {
+        backoffTimerRef.current = null;
+        fetchRosterRef.current();
+      }, next);
+    };
+    try {
+      const res = await base44.functions.invoke("room", { action: "getRoster", code: roomCode, sessionId });
+      const data = res?.data || {};
+      if (isRateLimited(data)) { handleRateLimit(); return; }
+      backoffRef.current = 0;
+      if (data.error === "not_found" || data.error === "closed") { setLeftReason("closed"); return; }
+      if (data.error === "not_in_room") {
+        if (seenSelfRef.current) setLeftReason("removed");
+        return;
+      }
+      const roster = data.players || [];
+      const mapped = roster.map((rp) => mapPlayer(rp, sessionId));
+      if (mapped.some((p) => p.isYou)) seenSelfRef.current = true;
+      else if (seenSelfRef.current) setLeftReason("removed");
+      setPlayers(mapped);
+    } catch (e) {
+      if (isRateLimited(null, e)) handleRateLimit();
+      // transient — don't clear room state
+    } finally {
+      inFlightRosterRef.current = false;
+    }
+  }, [roomCode, sessionId]);
+  fetchRosterRef.current = fetchRoster;
+
+  // Debounced roster refresh — coalesces bursts of realtime events into a
+  // single getRoster call. Skipped while a backoff timer is pending.
+  // Pass { force: true } for user-initiated actions that must not be delayed.
+  const refreshPlayers = useCallback((opts = {}) => {
+    if (!roomCode) return;
+    if (backoffTimerRef.current) return; // rate-limited; backoff will retry
+    if (opts.force) {
+      if (rosterDebounceRef.current) { clearTimeout(rosterDebounceRef.current); rosterDebounceRef.current = null; }
+      return fetchRoster();
+    }
+    if (rosterDebounceRef.current) clearTimeout(rosterDebounceRef.current);
+    rosterDebounceRef.current = setTimeout(() => {
+      rosterDebounceRef.current = null;
+      fetchRoster();
+    }, ROSTER_DEBOUNCE_MS);
+  }, [roomCode, fetchRoster]);
+
   // ---- game actions (all validated server-side) ----
   const callRoom = useCallback(async (action, extra = {}) => {
     if (!roomCode) return { error: "no_room" };
@@ -182,7 +246,7 @@ export function GameProvider({ children }) {
       const data = res?.data || {};
       if (data.error) return { error: data.error, active: data.active };
       if (data.room) setRoom(data.room);
-      refreshPlayers();
+      refreshPlayers({ force: true });
       return { ok: true };
     } catch (e) {
       return { error: e?.response?.data?.error || "start_failed", active: e?.response?.data?.active };
@@ -225,14 +289,26 @@ export function GameProvider({ children }) {
       } catch { /* transient */ }
     };
 
-    refreshPlayers();
+    fetchRoster();
     refreshRoom();
 
     const unsubPlayers = base44.entities.RoomPlayer.subscribe((e) => {
       if (!active) return;
       const d = e?.data || {};
-      // Refresh on any player event for this room; delete events may omit room_code
-      if (!d.room_code || d.room_code === roomCode) refreshPlayers();
+      if (d.room_code && d.room_code !== roomCode) return;
+      // create/delete = player joined/left → refresh
+      if (e.type === "create" || e.type === "delete") { refreshPlayers(); return; }
+      // update — only refresh if meaningful fields changed (not heartbeat last_seen)
+      if (e.type === "update") {
+        const existing = playersRef.current.find((p) => p.sessionId === d.session_id);
+        if (!existing) { refreshPlayers(); return; }
+        const meaningful =
+          (d.nickname != null && d.nickname !== existing.nickname) ||
+          (d.avatar_id != null && d.avatar_id !== (existing.avatar?.id || "")) ||
+          (d.photo_url != null && d.photo_url !== existing.photo) ||
+          (d.is_host != null && !!d.is_host !== existing.isHost);
+        if (meaningful) refreshPlayers();
+      }
     });
 
     const unsubRoom = base44.entities.Room.subscribe((e) => {
@@ -242,22 +318,24 @@ export function GameProvider({ children }) {
       if (e.type === "delete" || d.status === "closed") { setLeftReason("closed"); return; }
       setRoom(d);
       // When the game starts, ensure every client has the complete roster
-      if (d.status === "playing") refreshPlayers();
+      if (d.status === "playing") fetchRoster();
     });
 
-    const beat = () => base44.functions.invoke("room", { action: "heartbeat", code: roomCode, sessionId }).catch(() => {});
+    const beat = async () => {
+      try { await base44.functions.invoke("room", { action: "heartbeat", code: roomCode, sessionId }); } catch {}
+    };
     beat();
-    const beatTimer = setInterval(beat, 5000);
-    const rosterTimer = setInterval(refreshPlayers, 5000);
+    const beatTimer = setInterval(beat, HEARTBEAT_MS);
 
     return () => {
       active = false;
       if (typeof unsubPlayers === "function") unsubPlayers();
       if (typeof unsubRoom === "function") unsubRoom();
       clearInterval(beatTimer);
-      clearInterval(rosterTimer);
+      if (rosterDebounceRef.current) { clearTimeout(rosterDebounceRef.current); rosterDebounceRef.current = null; }
+      if (backoffTimerRef.current) { clearTimeout(backoffTimerRef.current); backoffTimerRef.current = null; }
     };
-  }, [roomCode, sessionId, refreshPlayers]);
+  }, [roomCode, sessionId, fetchRoster, refreshPlayers]);
 
   // ---- safety: ensure complete roster on game start / new round ----
   useEffect(() => {
@@ -300,19 +378,22 @@ export function GameProvider({ children }) {
     if (leftReason && window.location.pathname !== "/lobby") navigate("/lobby");
   }, [leftReason, navigate]);
 
-  // ---- reconnect on load + periodic cleanup ----
+  // ---- reconnect on load ----
+  // NOTE: cleanupRooms is NOT called from the client. It is a server-side
+  // maintenance function that lists + deletes all rooms/players matching TTL
+  // criteria. Calling it on every page load caused rate-limit storms and
+  // sporadic room deletion. It must remain disabled/unscheduled unless
+  // explicitly invoked by an admin or a future scheduled task.
   useEffect(() => {
-    base44.functions.invoke("cleanupRooms", {}).catch(() => {});
     const code = getActiveRoomCode();
     if (!code) return;
     (async () => {
       try {
-        const res = await base44.functions.invoke("room", { action: "lookup", code, sessionId });
-        const existing = res?.data?.room;
-        if (!existing || existing.status === "closed") { clearActiveRoom(); return; }
-        const roster = await base44.functions.invoke("room", { action: "getRoster", code, sessionId });
-        const data = roster?.data || {};
-        if (data.error) { clearActiveRoom(); return; }
+        const res = await base44.functions.invoke("room", { action: "getRoster", code, sessionId });
+        const data = res?.data || {};
+        if (isRateLimited(data)) return; // rate limited — preserve room, don't clear
+        if (data.error || !data.room) { clearActiveRoom(); return; }
+        const existing = data.room;
         const mine = (data.players || []).find((p) => p.session_id === sessionId);
         if (!mine) { clearActiveRoom(); return; }
         setRoom(existing); setRoomCode(code); setMode(existing.mode); setLength(existing.length);
@@ -327,8 +408,8 @@ export function GameProvider({ children }) {
         seenSelfRef.current = true;
         setPhase("lobby");
         // centralized navigation effect will route to the correct game page
-      } catch {
-        clearActiveRoom();
+      } catch (e) {
+        if (!isRateLimited(null, e)) clearActiveRoom();
       }
     })();
   }, [sessionId]);
