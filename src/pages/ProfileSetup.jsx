@@ -1,5 +1,5 @@
-import React, { useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, Upload, Camera, Check } from "lucide-react";
 import { useGame } from "@/game/GameContext";
@@ -11,7 +11,9 @@ import { sfx } from "@/lib/sound";
 
 export default function ProfileSetup() {
   const navigate = useNavigate();
-  const { you, roomCode, commitJoin } = useGame();
+  const location = useLocation();
+  const { you, pendingRoomCode, commitJoin } = useGame();
+  const joinRoomCode = location.state?.roomCode || pendingRoomCode || "";
   const [nickname, setNickname] = useState(you.nickname);
   const [photo, setPhoto] = useState(you.photo);
   const [avatar, setAvatar] = useState(you.avatar);
@@ -25,7 +27,12 @@ export default function ProfileSetup() {
     closed: "That room has ended",
     in_progress: "That game already started",
     full: "That room is full",
+    missing_room: "Choose a room before setting up your profile.",
   };
+
+  useEffect(() => {
+    if (joinRoomCode.length !== 4) navigate("/create", { replace: true, state: { roomSetupMissing: true } });
+  }, [joinRoomCode, navigate]);
 
   const handleFile = (file) => {
     if (!file) return;
@@ -53,9 +60,14 @@ export default function ProfileSetup() {
   const join = async () => {
     if (!nickname.trim()) { sfx.wrong(); return; }
     if (busy) return;
+    if (joinRoomCode.length !== 4) {
+      setError(JOIN_ERRORS.missing_room); sfx.wrong();
+      navigate("/create", { replace: true, state: { roomSetupMissing: true } });
+      return;
+    }
     setBusy(true); setError("");
     try {
-      await commitJoin({ nickname: nickname.trim(), avatar, photo });
+      await commitJoin({ nickname: nickname.trim(), avatar, photo, roomCode: joinRoomCode });
       sfx.lobby();
       navigate("/lobby");
     } catch (e) {
@@ -147,7 +159,7 @@ export default function ProfileSetup() {
         {busy ? "Joining…" : "Join Room"} <ArrowRight size={22} className="transition-transform group-hover:translate-x-1" />
       </button>
       {error && <p className="mt-3 text-center text-sm font-semibold text-[hsl(var(--mode-adult))]">{error}</p>}
-      {roomCode && <p className="mt-3 text-center text-sm text-[hsl(var(--ink))]/60">Joining room <span className="font-mono font-bold text-primary">{roomCode}</span></p>}
+      {joinRoomCode && <p className="mt-3 text-center text-sm text-[hsl(var(--ink))]/60">Joining room <span className="font-mono font-bold text-primary">{joinRoomCode}</span></p>}
     </div>
   );
 }

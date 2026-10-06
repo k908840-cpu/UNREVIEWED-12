@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Plus, LogIn, ArrowLeft, Star } from "lucide-react";
 import { useGame } from "@/game/GameContext";
@@ -8,9 +8,10 @@ import { sfx } from "@/lib/sound";
 
 export default function CreateJoin() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { createRoom, lookupRoom } = useGame();
   const [code, setCode] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState(location.state?.roomSetupMissing ? "Choose a room before setting up your profile." : "");
   const [busy, setBusy] = useState(false);
 
   const ERRORS = {
@@ -19,6 +20,7 @@ export default function CreateJoin() {
     in_progress: "That game already started",
     full: "That room is full",
     rate_limited: "Server is busy. Try again in a moment.",
+    request_failed: "Couldn't check that room. Try again.",
   };
 
   const handleCreate = async () => {
@@ -36,7 +38,8 @@ export default function CreateJoin() {
     try {
       const res = await lookupRoom(code);
       if (res?.error) { setError(ERRORS[res.error] || "Couldn't find that room"); sfx.wrong(); return; }
-      sfx.lobby(); navigate("/profile");
+      if (!res?.roomCode) { setError("Couldn't check that room. Try again."); sfx.wrong(); return; }
+      sfx.lobby(); navigate("/profile", { state: { roomCode: res.roomCode } });
     } catch { setError("Couldn't join. Try again."); }
     finally { setBusy(false); }
   };

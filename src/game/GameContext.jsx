@@ -3,7 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { PRESET_AVATARS } from "./mockData";
 import { setMuted as setSfxMuted, setVolume as setSfxVolume } from "@/lib/sound";
-import { getSessionId, getActiveRoomCode, setActiveRoomCode, clearActiveRoom } from "@/lib/session";
+import {
+  getSessionId, getActiveRoomCode, setActiveRoomCode, clearActiveRoom,
+  getPendingRoomCode, setPendingRoomCode, clearPendingRoomCode,
+} from "@/lib/session";
 
 const GameContext = createContext(null);
 
@@ -23,6 +26,7 @@ const isRateLimited = (data, err) => {
   return /rate limit/i.test(msg);
 };
 const rid = () => Math.random().toString(36).slice(2, 9);
+const normalizeRoomCode = (value) => String(value || "").toUpperCase().replace(/[^0-9A-Z]/g, "").slice(0, 6);
 
 const GAME_PHASE_ROUTES = {
   reveal: "/reveal",
@@ -55,6 +59,7 @@ export function GameProvider({ children }) {
   const [mode, setMode] = useState("family");
   const [length, setLength] = useState("standard");
   const [roomCode, setRoomCode] = useState("");
+  const [pendingRoomCode, setPendingRoomCodeState] = useState(() => getPendingRoomCode());
   const [room, setRoom] = useState(null);
   const [isHost, setIsHost] = useState(false);
   const [you, setYou] = useState({ nickname: "", photo: null, avatar: PRESET_AVATARS[0] });
@@ -74,6 +79,7 @@ export function GameProvider({ children }) {
   const backoffRef = useRef(0);
   const backoffTimerRef = useRef(null);
   const fetchRosterRef = useRef(async () => {});
+  const rosterPrimedRoomRef = useRef("");
 
   // Keep playersRef in sync for the realtime subscription's meaningful-change check.
   useEffect(() => { playersRef.current = players; }, [players]);
@@ -83,11 +89,13 @@ export function GameProvider({ children }) {
 
   const resetRoomState = useCallback(() => {
     clearActiveRoom();
+    clearPendingRoomCode();
     seenSelfRef.current = false;
+    rosterPrimedRoomRef.current = "";
     if (rosterDebounceRef.current) { clearTimeout(rosterDebounceRef.current); rosterDebounceRef.current = null; }
     if (backoffTimerRef.current) { clearTimeout(backoffTimerRef.current); backoffTimerRef.current = null; }
     backoffRef.current = 0; inFlightRosterRef.current = false;
-    setRoomCode(""); setRoom(null); setIsHost(false); setPlayers([]);
+    setRoomCode(""); setPendingRoomCodeState(""); setRoom(null); setIsHost(false); setPlayers([]);
     setYou({ nickname: "", photo: null, avatar: PRESET_AVATARS[0] });
     setLeftReason(null); setPhase("landing");
   }, []);
@@ -97,64 +105,96 @@ export function GameProvider({ children }) {
     const res = await base44.functions.invoke("room", { action: "create", sessionId, mode, length });
     const created = res?.data?.room;
     if (!created) throw new Error("create_failed");
-    setRoom(created); setRoomCode(created.code); setActiveRoomCode(created.code);
+    // Creating a room leads to profile setup; it is not a joined session yet.
+    // Do not start the active-room networking lifecycle until join succeeds.
+    clearActiveRoom();
+    setPendingRoomCode(created.code); setPendingRoomCodeState(created.code);
+    setRoom(created); setRoomCode("");
     setIsHost(true); setMode(created.mode); setLength(created.length); setPhase("config");
     return created;
   }, [sessionId, mode, length]);
 
   const lookupRoom = useCallback(async (rawCode) => {
-    const code = String(rawCode || "").toUpperCase().replace(/[^0-9A-Z]/g, "").slice(0, 6);
+    const code = normalizeRoomCode(rawCode);
     try {
       const res = await base44.functions.invoke("room", { action: "lookup", code, sessionId });
       const data = res?.data || {};
       if (data.error) return { error: data.error };
       if (data.room.status === "playing") return { error: "in_progress" };
       if (data.room.status === "closed") return { error: "closed" };
-      setRoom(data.room); setRoomCode(data.room.code);
+      // Lookup only validates a joinable room. It must not make this browser
+      // an active participant before the authoritative join has completed.
+      clearActiveRoom();
+      setPendingRoomCode(data.room.code); setPendingRoomCodeState(data.room.code);
+      setRoom(data.room); setRoomCode("");
       setMode(data.room.mode); setLength(data.room.length);
       setIsHost(data.room.host_session === sessionId);
-      return { ok: true, room: data.room };
+      return { ok: true, room: data.room, roomCode: data.room.code };
     } catch (e) {
       if (isRateLimited(null, e)) return { error: "rate_limited" };
-      return { error: "not_found" };
+      const error = e?.response?.data?.error;
+      if (["not_found", "closed", "in_progress", "full"].includes(error)) return { error };
+      return { error: "request_failed" };
     }
   }, [sessionId]);
 
-  const commitJoin = useCallback(async ({ nickname, avatar, photo }) => {
+  const requestRoster = useCallback(async (code) => {
+    const res = await base44.functions.invoke("room", { action: "getRoster", code, sessionId });
+    return res?.data || {};
+  }, [sessionId]);
+
+  const commitJoin = useCallback(async ({ nickname, avatar, photo, roomCode: requestedRoomCode }) => {
+    const joiningCode = normalizeRoomCode(requestedRoomCode || pendingRoomCode);
+    if (joiningCode.length !== 4) throw new Error("missing_room");
     try {
       const res = await base44.functions.invoke("room", {
-        action: "join", sessionId, code: roomCode,
+        action: "join", sessionId, code: joiningCode,
         nickname, avatar_id: avatar?.id || "", photo_url: photo || "",
       });
       const data = res?.data || {};
       if (data.error) throw new Error(data.error);
-      const joinedRoom = data.room;
-      const hostNow = joinedRoom ? joinedRoom.host_session === sessionId : isHost;
-      if (joinedRoom) { setRoom(joinedRoom); setMode(joinedRoom.mode); setLength(joinedRoom.length); }
+
+      // Populate the lobby from the service-role roster before enabling the
+      // joined-room lifecycle. Anonymous clients cannot rely on a direct
+      // RoomPlayer realtime event for their initial roster.
+      const rosterData = await requestRoster(joiningCode);
+      if (rosterData.error || !rosterData.room || !Array.isArray(rosterData.players)) {
+        throw new Error(rosterData.error || "roster_failed");
+      }
+      const mapped = rosterData.players.map((rp) => mapPlayer(rp, sessionId));
+      const me = mapped.find((player) => player.isYou);
+      if (!me) throw new Error("not_in_room");
+
+      const joinedRoom = rosterData.room;
+      const hostNow = joinedRoom.host_session === sessionId;
+      setRoom(joinedRoom); setMode(joinedRoom.mode); setLength(joinedRoom.length);
       setYou({
         id: sessionId,
-        nickname: data.player?.nickname || nickname,
-        photo: data.player?.photo_url || photo || null,
-        avatar: avatar || PRESET_AVATARS[0],
+        nickname: me.nickname,
+        photo: me.photo,
+        avatar: me.avatar || PRESET_AVATARS[0],
         isHost: hostNow,
       });
-      setIsHost(hostNow);
-      setActiveRoomCode(roomCode);
-      seenSelfRef.current = false;
+      setPlayers(mapped); setIsHost(hostNow);
+      seenSelfRef.current = true;
+      rosterPrimedRoomRef.current = joiningCode;
+      setRoomCode(joiningCode); setActiveRoomCode(joiningCode);
+      clearPendingRoomCode(); setPendingRoomCodeState("");
       setPhase("lobby");
       return { ok: true };
     } catch (e) {
       throw new Error(e?.response?.data?.error || e?.message || "join_failed");
     }
-  }, [sessionId, roomCode, isHost]);
+  }, [sessionId, pendingRoomCode, requestRoster]);
 
   const persistConfig = useCallback(async (m, l) => {
-    if (!roomCode || !isHost) return;
+    const code = roomCode || pendingRoomCode;
+    if (!code || !isHost) return;
     try {
-      const res = await base44.functions.invoke("room", { action: "config", code: roomCode, sessionId, mode: m, length: l });
+      const res = await base44.functions.invoke("room", { action: "config", code, sessionId, mode: m, length: l });
       if (res?.data?.room) setRoom(res.data.room);
     } catch { /* non-critical */ }
-  }, [roomCode, isHost, sessionId]);
+  }, [roomCode, pendingRoomCode, isHost, sessionId]);
 
   const kickPlayer = useCallback(async (targetSession) => {
     try { await base44.functions.invoke("room", { action: "kick", code: roomCode, sessionId, target_session: targetSession }); } catch {}
@@ -188,8 +228,7 @@ export function GameProvider({ children }) {
       }, next);
     };
     try {
-      const res = await base44.functions.invoke("room", { action: "getRoster", code: roomCode, sessionId });
-      const data = res?.data || {};
+      const data = await requestRoster(roomCode);
       if (isRateLimited(data)) { handleRateLimit(); return; }
       backoffRef.current = 0;
       if (data.error === "not_found" || data.error === "closed") { setLeftReason("closed"); return; }
@@ -208,7 +247,7 @@ export function GameProvider({ children }) {
     } finally {
       inFlightRosterRef.current = false;
     }
-  }, [roomCode, sessionId]);
+  }, [roomCode, sessionId, requestRoster]);
   fetchRosterRef.current = fetchRoster;
 
   // Debounced roster refresh — coalesces bursts of realtime events into a
@@ -289,7 +328,8 @@ export function GameProvider({ children }) {
       } catch { /* transient */ }
     };
 
-    fetchRoster();
+    if (rosterPrimedRoomRef.current === roomCode) rosterPrimedRoomRef.current = "";
+    else fetchRoster();
     refreshRoom();
 
     const unsubPlayers = base44.entities.RoomPlayer.subscribe((e) => {
@@ -392,10 +432,16 @@ export function GameProvider({ children }) {
         const res = await base44.functions.invoke("room", { action: "getRoster", code, sessionId });
         const data = res?.data || {};
         if (isRateLimited(data)) return; // rate limited — preserve room, don't clear
-        if (data.error || !data.room) { clearActiveRoom(); return; }
+        // Clear only after an authoritative absence/membership result. A 500
+        // or transient SDK failure must not discard a valid active session.
+        if (["not_found", "closed", "not_in_room"].includes(data.error)) { clearActiveRoom(); return; }
+        if (data.error || !data.room) return;
         const existing = data.room;
         const mine = (data.players || []).find((p) => p.session_id === sessionId);
         if (!mine) { clearActiveRoom(); return; }
+        // An already-active room wins over any stale pre-join code left in
+        // storage from an interrupted Profile Setup flow.
+        clearPendingRoomCode(); setPendingRoomCodeState("");
         setRoom(existing); setRoomCode(code); setMode(existing.mode); setLength(existing.length);
         setIsHost(existing.host_session === sessionId);
         setYou({
@@ -409,7 +455,8 @@ export function GameProvider({ children }) {
         setPhase("lobby");
         // centralized navigation effect will route to the correct game page
       } catch (e) {
-        if (!isRateLimited(null, e)) clearActiveRoom();
+        const error = e?.response?.data?.error;
+        if (["not_found", "closed", "not_in_room"].includes(error)) clearActiveRoom();
       }
     })();
   }, [sessionId]);
@@ -445,7 +492,7 @@ export function GameProvider({ children }) {
 
   const value = {
     sessionId,
-    mode, setMode, length, setLength, roomCode, room, isHost,
+    mode, setMode, length, setLength, roomCode, pendingRoomCode, room, isHost,
     you, setYou, players, leftReason, acknowledgeLeft,
     phase, setPhase,
     // game state
