@@ -38,7 +38,7 @@ const GAME_PHASE_ROUTES = {
   finished: "/final",
 };
 
-function mapPlayer(rp, sessionId) {
+function mapPlayer(rp, sessionId, hostSession) {
   const seen = Date.parse(rp.last_seen || "") || 0;
   return {
     id: rp.session_id,
@@ -46,7 +46,9 @@ function mapPlayer(rp, sessionId) {
     nickname: rp.nickname || "Player",
     photo: rp.photo_url || null,
     avatar: PRESET_AVATARS.find((a) => a.id === rp.avatar_id) || null,
-    isHost: !!rp.is_host,
+    // Room.host_session is the single server-authoritative host identity.
+    // RoomPlayer.is_host is only a denormalized record field and can be stale.
+    isHost: rp.session_id === hostSession,
     isYou: rp.session_id === sessionId,
     connected: !!rp.connected && Date.now() - seen < FRESH_MS,
   };
@@ -161,7 +163,7 @@ export function GameProvider({ children }) {
       if (rosterData.error || !rosterData.room || !Array.isArray(rosterData.players)) {
         throw new Error(rosterData.error || "roster_failed");
       }
-      const mapped = rosterData.players.map((rp) => mapPlayer(rp, sessionId));
+      const mapped = rosterData.players.map((rp) => mapPlayer(rp, sessionId, rosterData.room.host_session));
       const me = mapped.find((player) => player.isYou);
       if (!me) throw new Error("not_in_room");
 
@@ -237,7 +239,12 @@ export function GameProvider({ children }) {
         return;
       }
       const roster = data.players || [];
-      const mapped = roster.map((rp) => mapPlayer(rp, sessionId));
+      const hostSession = data.room?.host_session;
+      if (data.room) {
+        setRoom(data.room);
+        setIsHost(hostSession === sessionId);
+      }
+      const mapped = roster.map((rp) => mapPlayer(rp, sessionId, hostSession));
       if (mapped.some((p) => p.isYou)) seenSelfRef.current = true;
       else if (seenSelfRef.current) setLeftReason("removed");
       setPlayers(mapped);
@@ -321,6 +328,19 @@ export function GameProvider({ children }) {
     if (!roomCode) return undefined;
     let active = true;
 
+    const syncHostSession = (hostSession) => {
+      if (typeof hostSession !== "string") return;
+      setRoom((current) => {
+        if (!current || current.code !== roomCode || current.host_session === hostSession) return current;
+        return { ...current, host_session: hostSession };
+      });
+      setIsHost(hostSession === sessionId);
+      setPlayers((current) => {
+        if (current.every((player) => player.isHost === (player.sessionId === hostSession))) return current;
+        return current.map((player) => ({ ...player, isHost: player.sessionId === hostSession }));
+      });
+    };
+
     const refreshRoom = async () => {
       try {
         const list = await base44.entities.Room.filter({ code: roomCode });
@@ -345,8 +365,7 @@ export function GameProvider({ children }) {
         const meaningful =
           (d.nickname != null && d.nickname !== existing.nickname) ||
           (d.avatar_id != null && d.avatar_id !== (existing.avatar?.id || "")) ||
-          (d.photo_url != null && d.photo_url !== existing.photo) ||
-          (d.is_host != null && !!d.is_host !== existing.isHost);
+          (d.photo_url != null && d.photo_url !== existing.photo);
         if (meaningful) refreshPlayers();
       }
     });
@@ -357,12 +376,16 @@ export function GameProvider({ children }) {
       if (d.code !== roomCode) return;
       if (e.type === "delete" || d.status === "closed") { setLeftReason("closed"); return; }
       setRoom(d);
+      syncHostSession(d.host_session);
       // When the game starts, ensure every client has the complete roster
       if (d.status === "playing") fetchRoster();
     });
 
     const beat = async () => {
-      try { await base44.functions.invoke("room", { action: "heartbeat", code: roomCode, sessionId }); } catch {}
+      try {
+        const res = await base44.functions.invoke("room", { action: "heartbeat", code: roomCode, sessionId });
+        if (active) syncHostSession(res?.data?.host_session);
+      } catch {}
     };
     beat();
     const beatTimer = setInterval(beat, HEARTBEAT_MS);

@@ -29,6 +29,11 @@ export default async function (req) {
       return list[0] || null;
     };
     const playersOf = async (code) => await Player.filter({ room_code: code });
+    // Host migration is decided once on the server. Use a session-id tie
+    // breaker so a rare identical created_date cannot make query order matter.
+    const nextActiveHost = (players) => activePlayers(players, now)
+      .sort((a, b) => String(a.created_date || '').localeCompare(String(b.created_date || ''))
+        || String(a.session_id || '').localeCompare(String(b.session_id || '')))[0];
 
     switch (action) {
       case 'create': {
@@ -112,9 +117,8 @@ export default async function (req) {
         let hostSession = room.host_session;
         const hostPlayer = players.find((p) => p.session_id === hostSession);
         if (!isActive(hostPlayer, now)) {
-          const candidates = activePlayers(players, now).sort((a, b) => String(a.created_date || '').localeCompare(String(b.created_date || '')));
-          if (candidates.length) {
-            const next = candidates[0];
+          const next = nextActiveHost(players);
+          if (next) {
             hostSession = next.session_id;
             await Room.update(room.id, { host_session: hostSession });
             await Player.update(next.id, { is_host: true });
@@ -134,10 +138,10 @@ export default async function (req) {
           await Player.delete(me.id);
           const remaining = players.filter((p) => p.id !== me.id);
           if (room.host_session === sessionId) {
-            const act = activePlayers(remaining, now).sort((a, b) => String(a.created_date || '').localeCompare(String(b.created_date || '')));
-            if (act.length) {
-              await Room.update(room.id, { host_session: act[0].session_id });
-              await Player.update(act[0].id, { is_host: true });
+            const next = nextActiveHost(remaining);
+            if (next) {
+              await Room.update(room.id, { host_session: next.session_id });
+              await Player.update(next.id, { is_host: true });
             } else {
               await Room.update(room.id, { status: 'closed' });
             }
