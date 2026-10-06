@@ -28,8 +28,7 @@ export default function Lobby() {
     if (room?.status === "playing") navigate("/reveal");
   }, [room?.status, navigate]);
 
-  const activeCount = players.filter((p) => p.connected && !p.isYou).length + (players.some((p) => p.isYou && p.connected) ? 1 : 0);
-  const canStart = activeCount >= MIN_PLAYERS;
+  const hasMinimumRoster = players.length >= MIN_PLAYERS;
 
   const copyCode = () => {
     navigator.clipboard?.writeText(roomCode);
@@ -38,11 +37,10 @@ export default function Lobby() {
   };
 
   const start = async () => {
-    if (!canStart) { setError(`Need at least ${MIN_PLAYERS} players`); sfx.wrong(); return; }
     setBusy(true); setError("");
     const res = await startGame();
     setBusy(false);
-    if (res?.error) { setError(res.error === "not_enough_players" ? `Need at least ${MIN_PLAYERS} players` : "Couldn't start. Try again."); sfx.wrong(); return; }
+    if (res?.error) { setError(res.error === "not_enough_players" ? `Need at least ${MIN_PLAYERS} active players` : "Couldn't start. Try again."); sfx.wrong(); return; }
     sfx.reveal(); navigate("/reveal");
   };
 
@@ -146,13 +144,13 @@ export default function Lobby() {
             <motion.button
               onClick={start}
               disabled={busy}
-              whileHover={{ scale: canStart ? 1.03 : 1 }} whileTap={{ scale: 0.97 }}
-              className={cn("inline-flex items-center gap-2 rounded-full border-4 border-[hsl(var(--ink))] px-10 py-4 font-display text-2xl uppercase tracking-wide shadow-[0_6px_0_0_hsl(var(--ink))]", canStart ? "bg-primary text-primary-foreground" : "bg-white text-[hsl(var(--ink))]/40")}
+              whileHover={{ scale: hasMinimumRoster ? 1.03 : 1 }} whileTap={{ scale: 0.97 }}
+              className={cn("inline-flex items-center gap-2 rounded-full border-4 border-[hsl(var(--ink))] px-10 py-4 font-display text-2xl uppercase tracking-wide shadow-[0_6px_0_0_hsl(var(--ink))]", hasMinimumRoster ? "bg-primary text-primary-foreground" : "bg-white text-[hsl(var(--ink))]/40")}
             >
               <Play size={24} fill="currentColor" /> {busy ? "Starting…" : "Start Game"}
             </motion.button>
             <p className="mt-3 text-xs uppercase tracking-wider opacity-50">
-              {canStart ? `${activeCount} players ready` : `${activeCount}/${MIN_PLAYERS} ready — waiting for more`}
+              {hasMinimumRoster ? `${players.length} players joined — server checks who is active` : `${players.length}/${MIN_PLAYERS} joined — waiting for more`}
             </p>
             <div className="mt-5"><button onClick={end} className="text-xs uppercase tracking-wider opacity-50 hover:opacity-100">End the room</button></div>
           </>
