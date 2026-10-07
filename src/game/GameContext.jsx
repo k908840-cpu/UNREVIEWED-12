@@ -81,9 +81,13 @@ export function GameProvider({ children }) {
   const backoffRef = useRef(0);
   const backoffTimerRef = useRef(null);
   const fetchRosterRef = useRef(async () => {});
+  const refreshPlayersRef = useRef(() => {});
+  const activeRoomCodeRef = useRef(getActiveRoomCode() || "");
   const rosterPrimedRoomRef = useRef("");
   const initialJoinHydrationRoomRef = useRef("");
+  const initialJoinHydrationInFlightRoomRef = useRef("");
   const postJoinRosterHydratedRoomRef = useRef("");
+  const deferredJoinRosterReconciliationRoomRef = useRef("");
 
   // Keep playersRef in sync for the realtime subscription's meaningful-change check.
   useEffect(() => {
@@ -95,6 +99,7 @@ export function GameProvider({ children }) {
     if (hydratedCode && initialJoinHydrationRoomRef.current === hydratedCode) {
       initialJoinHydrationRoomRef.current = "";
       postJoinRosterHydratedRoomRef.current = "";
+      deferredJoinRosterReconciliationRoomRef.current = "";
     }
   }, [players]);
 
@@ -104,10 +109,13 @@ export function GameProvider({ children }) {
   const resetRoomState = useCallback(() => {
     clearActiveRoom();
     clearPendingRoomCode();
+    activeRoomCodeRef.current = "";
     seenSelfRef.current = false;
     rosterPrimedRoomRef.current = "";
     initialJoinHydrationRoomRef.current = "";
+    initialJoinHydrationInFlightRoomRef.current = "";
     postJoinRosterHydratedRoomRef.current = "";
+    deferredJoinRosterReconciliationRoomRef.current = "";
     if (rosterDebounceRef.current) { clearTimeout(rosterDebounceRef.current); rosterDebounceRef.current = null; }
     if (backoffTimerRef.current) { clearTimeout(backoffTimerRef.current); backoffTimerRef.current = null; }
     backoffRef.current = 0; inFlightRosterRef.current = false;
@@ -124,6 +132,7 @@ export function GameProvider({ children }) {
     // Creating a room leads to profile setup; it is not a joined session yet.
     // Do not start the active-room networking lifecycle until join succeeds.
     clearActiveRoom();
+    activeRoomCodeRef.current = "";
     setPendingRoomCode(created.code); setPendingRoomCodeState(created.code);
     setRoom(created); setRoomCode("");
     setIsHost(true); setMode(created.mode); setLength(created.length); setPhase("config");
@@ -141,6 +150,7 @@ export function GameProvider({ children }) {
       // Lookup only validates a joinable room. It must not make this browser
       // an active participant before the authoritative join has completed.
       clearActiveRoom();
+      activeRoomCodeRef.current = "";
       setPendingRoomCode(data.room.code); setPendingRoomCodeState(data.room.code);
       setRoom(data.room); setRoomCode("");
       setMode(data.room.mode); setLength(data.room.length);
@@ -193,6 +203,10 @@ export function GameProvider({ children }) {
       // fetch; the call below uses the shared dedup/backoff path instead.
       rosterPrimedRoomRef.current = joiningCode;
       initialJoinHydrationRoomRef.current = joiningCode;
+      initialJoinHydrationInFlightRoomRef.current = "";
+      postJoinRosterHydratedRoomRef.current = "";
+      deferredJoinRosterReconciliationRoomRef.current = "";
+      activeRoomCodeRef.current = joiningCode;
       setRoomCode(joiningCode); setActiveRoomCode(joiningCode);
       clearPendingRoomCode(); setPendingRoomCodeState("");
       setPhase("lobby");
@@ -235,8 +249,25 @@ export function GameProvider({ children }) {
   const fetchRoster = useCallback(async (requestedRoomCode = roomCode) => {
     const code = normalizeRoomCode(requestedRoomCode);
     if (!code) return;
-    if (inFlightRosterRef.current) return;
+    if (inFlightRosterRef.current) {
+      // The join-specific request was deduplicated against an existing fetch.
+      // Do not leave its guard set: a later heartbeat/realtime mismatch can
+      // then use the normal debounced reconciliation path.
+      if (
+        initialJoinHydrationRoomRef.current === code
+        && initialJoinHydrationInFlightRoomRef.current !== code
+      ) {
+        initialJoinHydrationRoomRef.current = "";
+        postJoinRosterHydratedRoomRef.current = "";
+      }
+      return;
+    }
     inFlightRosterRef.current = true;
+    const isInitialJoinHydration = initialJoinHydrationRoomRef.current === code;
+    if (isInitialJoinHydration) initialJoinHydrationInFlightRoomRef.current = code;
+    let initialHydrationSucceeded = false;
+    let initialHydrationRateLimited = false;
+    let initialHydrationDefinitive = false;
     const handleRateLimit = () => {
       const next = Math.min(backoffRef.current === 0 ? BACKOFF_BASE_MS : backoffRef.current * 2, BACKOFF_MAX_MS);
       backoffRef.current = next;
@@ -248,13 +279,28 @@ export function GameProvider({ children }) {
     };
     try {
       const data = await requestRoster(code);
-      if (isRateLimited(data)) { handleRateLimit(); return; }
+      // A prior room may finish after leave/rejoin. It must not overwrite the
+      // current room's authoritative state.
+      if (activeRoomCodeRef.current !== code) return;
+      if (isRateLimited(data)) {
+        if (isInitialJoinHydration) initialHydrationRateLimited = true;
+        handleRateLimit();
+        return;
+      }
       backoffRef.current = 0;
-      if (data.error === "not_found" || data.error === "closed") { setLeftReason("closed"); return; }
+      if (data.error === "not_found" || data.error === "closed") {
+        if (isInitialJoinHydration) initialHydrationDefinitive = true;
+        setLeftReason("closed");
+        return;
+      }
       if (data.error === "not_in_room") {
+        if (isInitialJoinHydration) initialHydrationDefinitive = true;
         if (seenSelfRef.current) setLeftReason("removed");
         return;
       }
+      // An unexpected response is transient. Do not turn a successful join
+      // into an empty local roster while the next authoritative retry can run.
+      if (data.error || !data.room || !Array.isArray(data.players)) return;
       const roster = data.players || [];
       const hostSession = data.room?.host_session;
       if (data.room) {
@@ -264,17 +310,33 @@ export function GameProvider({ children }) {
       const mapped = roster.map((rp) => mapPlayer(rp, sessionId, hostSession));
       if (mapped.some((p) => p.isYou)) seenSelfRef.current = true;
       else if (seenSelfRef.current) setLeftReason("removed");
-      if (initialJoinHydrationRoomRef.current === code && data.room && Array.isArray(data.players)) {
+      if (isInitialJoinHydration) {
+        initialHydrationSucceeded = true;
         postJoinRosterHydratedRoomRef.current = code;
       }
       setPlayers(mapped);
     } catch (e) {
-      if (isRateLimited(null, e)) handleRateLimit();
+      if (activeRoomCodeRef.current !== code) return;
+      if (isRateLimited(null, e)) {
+        if (isInitialJoinHydration) initialHydrationRateLimited = true;
+        handleRateLimit();
+      }
       // transient — don't clear room state
     } finally {
-      inFlightRosterRef.current = false;
-      if (initialJoinHydrationRoomRef.current === code && postJoinRosterHydratedRoomRef.current !== code) {
+      if (activeRoomCodeRef.current === code) inFlightRosterRef.current = false;
+      if (initialJoinHydrationInFlightRoomRef.current === code) {
+        initialJoinHydrationInFlightRoomRef.current = "";
+      }
+      if (isInitialJoinHydration && initialJoinHydrationRoomRef.current === code && !initialHydrationSucceeded) {
         initialJoinHydrationRoomRef.current = "";
+        postJoinRosterHydratedRoomRef.current = "";
+        const needsDeferredReconciliation = deferredJoinRosterReconciliationRoomRef.current === code;
+        if (needsDeferredReconciliation) deferredJoinRosterReconciliationRoomRef.current = "";
+        // Rate-limit retries are owned exclusively by the existing backoff.
+        // Definitive errors already send the client through missing-room recovery.
+        if (needsDeferredReconciliation && !initialHydrationRateLimited && !initialHydrationDefinitive) {
+          refreshPlayersRef.current();
+        }
       }
     }
   }, [roomCode, sessionId, requestRoster]);
@@ -296,6 +358,7 @@ export function GameProvider({ children }) {
       fetchRoster();
     }, ROSTER_DEBOUNCE_MS);
   }, [roomCode, fetchRoster]);
+  refreshPlayersRef.current = refreshPlayers;
 
   // ---- game actions (all validated server-side) ----
   const callRoom = useCallback(async (action, extra = {}) => {
@@ -366,6 +429,14 @@ export function GameProvider({ children }) {
       });
     };
 
+    const requestRosterReconciliation = () => {
+      if (initialJoinHydrationRoomRef.current === roomCode) {
+        deferredJoinRosterReconciliationRoomRef.current = roomCode;
+      } else {
+        refreshPlayers();
+      }
+    };
+
     const reconcileHeartbeat = (data) => {
       syncHostSession(data?.host_session);
 
@@ -381,10 +452,10 @@ export function GameProvider({ children }) {
         const remoteIds = new Set(data.roster_session_ids.filter((id) => typeof id === "string"));
         const localIds = new Set(playersRef.current.map((player) => player.sessionId));
         const rosterChanged = remoteIds.size !== localIds.size || [...remoteIds].some((id) => !localIds.has(id));
-        // The initial post-join fetch is already in flight. Let it settle
-        // before considering heartbeat membership reconciliation so joining
-        // does not produce a second same-tick getRoster request.
-        if (rosterChanged && initialJoinHydrationRoomRef.current !== roomCode) refreshPlayers();
+        // The initial post-join fetch is already in flight. Remember a real
+        // membership mismatch, but let that fetch settle before using the
+        // normal debounced reconciliation path.
+        if (rosterChanged) requestRosterReconciliation();
       }
     };
 
@@ -396,16 +467,16 @@ export function GameProvider({ children }) {
       const d = e?.data || {};
       if (d.room_code && d.room_code !== roomCode) return;
       // create/delete = player joined/left → refresh
-      if (e.type === "create" || e.type === "delete") { refreshPlayers(); return; }
+      if (e.type === "create" || e.type === "delete") { requestRosterReconciliation(); return; }
       // update — only refresh if meaningful fields changed (not heartbeat last_seen)
       if (e.type === "update") {
         const existing = playersRef.current.find((p) => p.sessionId === d.session_id);
-        if (!existing) { refreshPlayers(); return; }
+        if (!existing) { requestRosterReconciliation(); return; }
         const meaningful =
           (d.nickname != null && d.nickname !== existing.nickname) ||
           (d.avatar_id != null && d.avatar_id !== (existing.avatar?.id || "")) ||
           (d.photo_url != null && d.photo_url !== existing.photo);
-        if (meaningful) refreshPlayers();
+        if (meaningful) requestRosterReconciliation();
       }
     });
 
@@ -493,6 +564,7 @@ export function GameProvider({ children }) {
       // A saved room originated from a successful join. On a transient
       // reconnect failure, resume the normal active-room recovery path rather
       // than sending the player through join again.
+      activeRoomCodeRef.current = code;
       setRoomCode(code);
       setPhase("lobby");
     };
