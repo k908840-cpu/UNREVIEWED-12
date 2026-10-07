@@ -8,12 +8,14 @@ import Avatar from "@/components/Avatar";
 import Stamp from "@/components/Stamp";
 import { cn } from "@/lib/utils";
 import { sfx } from "@/lib/sound";
+import { getActiveRoomCode } from "@/lib/session";
 
 export default function ProfileSetup() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { you, pendingRoomCode, commitJoin } = useGame();
+  const { you, roomCode, pendingRoomCode, commitJoin } = useGame();
   const joinRoomCode = location.state?.roomCode || pendingRoomCode || "";
+  const savedActiveRoomCode = getActiveRoomCode();
   const [nickname, setNickname] = useState(you.nickname);
   const [photo, setPhoto] = useState(you.photo);
   const [avatar, setAvatar] = useState(you.avatar);
@@ -31,8 +33,13 @@ export default function ProfileSetup() {
   };
 
   useEffect(() => {
+    // Wait for GameProvider's authoritative reconnect check when storage has
+    // an active room. It will either set roomCode and route to the lobby, or
+    // clear the stale entry and route back to Create/Join.
+    if (roomCode) { navigate("/lobby", { replace: true }); return; }
+    if (savedActiveRoomCode) return;
     if (joinRoomCode.length !== 4) navigate("/create", { replace: true, state: { roomSetupMissing: true } });
-  }, [joinRoomCode, navigate]);
+  }, [roomCode, savedActiveRoomCode, joinRoomCode, navigate]);
 
   const handleFile = (file) => {
     if (!file) return;

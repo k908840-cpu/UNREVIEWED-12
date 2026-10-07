@@ -82,9 +82,21 @@ export function GameProvider({ children }) {
   const backoffTimerRef = useRef(null);
   const fetchRosterRef = useRef(async () => {});
   const rosterPrimedRoomRef = useRef("");
+  const initialJoinHydrationRoomRef = useRef("");
+  const postJoinRosterHydratedRoomRef = useRef("");
 
   // Keep playersRef in sync for the realtime subscription's meaningful-change check.
-  useEffect(() => { playersRef.current = players; }, [players]);
+  useEffect(() => {
+    playersRef.current = players;
+    // Keep the initial join-hydration guard through the render that applies
+    // the full roster, so an overlapping heartbeat cannot queue a duplicate
+    // fetch using the previous self-only player snapshot.
+    const hydratedCode = postJoinRosterHydratedRoomRef.current;
+    if (hydratedCode && initialJoinHydrationRoomRef.current === hydratedCode) {
+      initialJoinHydrationRoomRef.current = "";
+      postJoinRosterHydratedRoomRef.current = "";
+    }
+  }, [players]);
 
   const setVolume = useCallback((v) => { setVol(v); setSfxVolume(v); }, []);
   const toggleMute = useCallback(() => setMutedState((m) => { const next = !m; setSfxMuted(next); return next; }), []);
@@ -94,6 +106,8 @@ export function GameProvider({ children }) {
     clearPendingRoomCode();
     seenSelfRef.current = false;
     rosterPrimedRoomRef.current = "";
+    initialJoinHydrationRoomRef.current = "";
+    postJoinRosterHydratedRoomRef.current = "";
     if (rosterDebounceRef.current) { clearTimeout(rosterDebounceRef.current); rosterDebounceRef.current = null; }
     if (backoffTimerRef.current) { clearTimeout(backoffTimerRef.current); backoffTimerRef.current = null; }
     backoffRef.current = 0; inFlightRosterRef.current = false;
@@ -156,33 +170,35 @@ export function GameProvider({ children }) {
       const data = res?.data || {};
       if (data.error) throw new Error(data.error);
 
-      // Populate the lobby from the service-role roster before enabling the
-      // joined-room lifecycle. Anonymous clients cannot rely on a direct
-      // RoomPlayer realtime event for their initial roster.
-      const rosterData = await requestRoster(joiningCode);
-      if (rosterData.error || !rosterData.room || !Array.isArray(rosterData.players)) {
-        throw new Error(rosterData.error || "roster_failed");
-      }
-      const mapped = rosterData.players.map((rp) => mapPlayer(rp, sessionId, rosterData.room.host_session));
-      const me = mapped.find((player) => player.isYou);
-      if (!me) throw new Error("not_in_room");
-
-      const joinedRoom = rosterData.room;
+      // A successful join has already established server-authoritative
+      // membership. Activate that session before roster hydration so a
+      // temporary getRoster failure cannot strand the player on Profile Setup.
+      const joinedRoom = data.room;
+      if (!joinedRoom) throw new Error("join_failed");
       const hostNow = joinedRoom.host_session === sessionId;
+      const joinedPlayer = data.player ? mapPlayer(data.player, sessionId, joinedRoom.host_session) : null;
       setRoom(joinedRoom); setMode(joinedRoom.mode); setLength(joinedRoom.length);
       setYou({
         id: sessionId,
-        nickname: me.nickname,
-        photo: me.photo,
-        avatar: me.avatar || PRESET_AVATARS[0],
+        nickname: joinedPlayer?.nickname || nickname,
+        photo: joinedPlayer?.photo || photo || null,
+        avatar: joinedPlayer?.avatar || avatar || PRESET_AVATARS[0],
         isHost: hostNow,
       });
-      setPlayers(mapped); setIsHost(hostNow);
+      // Keep the server-returned self record until getRoster replaces this
+      // with the complete authoritative roster.
+      setPlayers(joinedPlayer ? [joinedPlayer] : []); setIsHost(hostNow);
       seenSelfRef.current = true;
+      // The active-room effect will see this flag and skip its same-tick
+      // fetch; the call below uses the shared dedup/backoff path instead.
       rosterPrimedRoomRef.current = joiningCode;
+      initialJoinHydrationRoomRef.current = joiningCode;
       setRoomCode(joiningCode); setActiveRoomCode(joiningCode);
       clearPendingRoomCode(); setPendingRoomCodeState("");
       setPhase("lobby");
+      // Do not await hydration: getRoster is authoritative for the complete
+      // roster, but transient failures must not undo a successful join.
+      void fetchRosterRef.current(joiningCode);
       return { ok: true };
     } catch (e) {
       throw new Error(e?.response?.data?.error || e?.message || "join_failed");
@@ -216,8 +232,9 @@ export function GameProvider({ children }) {
 
   // Immediate roster fetch with in-flight dedup + exponential backoff on
   // rate-limit errors. Only genuine not_found / closed clear room state.
-  const fetchRoster = useCallback(async () => {
-    if (!roomCode) return;
+  const fetchRoster = useCallback(async (requestedRoomCode = roomCode) => {
+    const code = normalizeRoomCode(requestedRoomCode);
+    if (!code) return;
     if (inFlightRosterRef.current) return;
     inFlightRosterRef.current = true;
     const handleRateLimit = () => {
@@ -230,7 +247,7 @@ export function GameProvider({ children }) {
       }, next);
     };
     try {
-      const data = await requestRoster(roomCode);
+      const data = await requestRoster(code);
       if (isRateLimited(data)) { handleRateLimit(); return; }
       backoffRef.current = 0;
       if (data.error === "not_found" || data.error === "closed") { setLeftReason("closed"); return; }
@@ -247,12 +264,18 @@ export function GameProvider({ children }) {
       const mapped = roster.map((rp) => mapPlayer(rp, sessionId, hostSession));
       if (mapped.some((p) => p.isYou)) seenSelfRef.current = true;
       else if (seenSelfRef.current) setLeftReason("removed");
+      if (initialJoinHydrationRoomRef.current === code && data.room && Array.isArray(data.players)) {
+        postJoinRosterHydratedRoomRef.current = code;
+      }
       setPlayers(mapped);
     } catch (e) {
       if (isRateLimited(null, e)) handleRateLimit();
       // transient — don't clear room state
     } finally {
       inFlightRosterRef.current = false;
+      if (initialJoinHydrationRoomRef.current === code && postJoinRosterHydratedRoomRef.current !== code) {
+        initialJoinHydrationRoomRef.current = "";
+      }
     }
   }, [roomCode, sessionId, requestRoster]);
   fetchRosterRef.current = fetchRoster;
@@ -358,7 +381,10 @@ export function GameProvider({ children }) {
         const remoteIds = new Set(data.roster_session_ids.filter((id) => typeof id === "string"));
         const localIds = new Set(playersRef.current.map((player) => player.sessionId));
         const rosterChanged = remoteIds.size !== localIds.size || [...remoteIds].some((id) => !localIds.has(id));
-        if (rosterChanged) refreshPlayers();
+        // The initial post-join fetch is already in flight. Let it settle
+        // before considering heartbeat membership reconciliation so joining
+        // does not produce a second same-tick getRoster request.
+        if (rosterChanged && initialJoinHydrationRoomRef.current !== roomCode) refreshPlayers();
       }
     };
 
@@ -463,18 +489,29 @@ export function GameProvider({ children }) {
   useEffect(() => {
     const code = getActiveRoomCode();
     if (!code) return;
+    const resumeActiveRoom = () => {
+      // A saved room originated from a successful join. On a transient
+      // reconnect failure, resume the normal active-room recovery path rather
+      // than sending the player through join again.
+      setRoomCode(code);
+      setPhase("lobby");
+    };
+    const invalidateSavedRoom = () => {
+      resetRoomState();
+      navigate("/create", { replace: true });
+    };
     (async () => {
       try {
         const res = await base44.functions.invoke("room", { action: "getRoster", code, sessionId });
         const data = res?.data || {};
-        if (isRateLimited(data)) return; // rate limited — preserve room, don't clear
+        if (isRateLimited(data)) { resumeActiveRoom(); return; }
         // Clear only after an authoritative absence/membership result. A 500
         // or transient SDK failure must not discard a valid active session.
-        if (["not_found", "closed", "not_in_room"].includes(data.error)) { clearActiveRoom(); return; }
-        if (data.error || !data.room) return;
+        if (["not_found", "closed", "not_in_room"].includes(data.error)) { invalidateSavedRoom(); return; }
+        if (data.error || !data.room) { resumeActiveRoom(); return; }
         const existing = data.room;
         const mine = (data.players || []).find((p) => p.session_id === sessionId);
-        if (!mine) { clearActiveRoom(); return; }
+        if (!mine) { invalidateSavedRoom(); return; }
         // An already-active room wins over any stale pre-join code left in
         // storage from an interrupted Profile Setup flow.
         clearPendingRoomCode(); setPendingRoomCodeState("");
@@ -492,10 +529,11 @@ export function GameProvider({ children }) {
         // centralized navigation effect will route to the correct game page
       } catch (e) {
         const error = e?.response?.data?.error;
-        if (["not_found", "closed", "not_in_room"].includes(error)) clearActiveRoom();
+        if (["not_found", "closed", "not_in_room"].includes(error)) invalidateSavedRoom();
+        else resumeActiveRoom();
       }
     })();
-  }, [sessionId]);
+  }, [sessionId, resetRoomState, navigate]);
 
   // ---- derived game state (sanitized: authors/ratings hidden until results) ----
   const rawGame = room?.game_state;
