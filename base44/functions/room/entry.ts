@@ -1,5 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.44';
-import { makeCode, normalizeCode, MAX_PLAYERS, MIN_PLAYERS, isActive, activePlayers } from '../../shared/rooms.ts';
+import { makeCode, normalizeCode, MAX_PLAYERS, MIN_PLAYERS, HOST_MIGRATION_GRACE_MS, isActive, activePlayers } from '../../shared/rooms.ts';
 import { PHASE_DURATIONS, LENGTH_CYCLES, buildSubjectOrder, selectPrompt, tryAdvance, doAdvance } from '../../shared/game.ts';
 
 const LENGTHS = ['quick', 'standard', 'party', 'endless'];
@@ -31,7 +31,7 @@ export default async function (req) {
     const playersOf = async (code) => await Player.filter({ room_code: code });
     // Host migration is decided once on the server. Use a session-id tie
     // breaker so a rare identical created_date cannot make query order matter.
-    const nextActiveHost = (players) => activePlayers(players, now)
+    const nextActiveHost = (players, windowMs) => activePlayers(players, now, windowMs)
       .sort((a, b) => String(a.created_date || '').localeCompare(String(b.created_date || ''))
         || String(a.session_id || '').localeCompare(String(b.session_id || '')))[0];
 
@@ -113,20 +113,49 @@ export default async function (req) {
         const players = await playersOf(room.code);
         const me = players.find((p) => p.session_id === sessionId);
         if (!me) return Response.json({ error: 'not_in_room' }, { status: 404 });
+
+        // Treat this request as proof that its caller is active before judging
+        // whether the host is stale. Re-read the room and membership after the
+        // write so migration uses current persisted state rather than the
+        // heartbeat's initial snapshot.
         await Player.update(me.id, { connected: true, last_seen: nowIso });
-        let hostSession = room.host_session;
-        const hostPlayer = players.find((p) => p.session_id === hostSession);
-        if (!isActive(hostPlayer, now)) {
-          const next = nextActiveHost(players);
-          if (next) {
-            hostSession = next.session_id;
-            await Room.update(room.id, { host_session: hostSession });
-            await Player.update(next.id, { is_host: true });
-            const stale = players.find((p) => p.is_host && p.session_id !== hostSession);
-            if (stale) await Player.update(stale.id, { is_host: false });
+
+        const currentRoom = await findRoom(room.code);
+        if (!currentRoom || currentRoom.status === 'closed') return Response.json({ error: 'gone' }, { status: 404 });
+        const currentPlayers = await playersOf(currentRoom.code);
+        if (!currentPlayers.some((p) => p.session_id === sessionId)) {
+          return Response.json({ error: 'not_in_room' }, { status: 404 });
+        }
+
+        let hostSession = currentRoom.host_session;
+        const currentHost = currentPlayers.find((p) => p.session_id === hostSession);
+        if (!isActive(currentHost, now, HOST_MIGRATION_GRACE_MS)) {
+          const next = nextActiveHost(currentPlayers, HOST_MIGRATION_GRACE_MS);
+          if (next && next.session_id !== hostSession) {
+            // This is a practical read-select-update flow, not a transaction.
+            // The persisted room is re-read below and is the only host value
+            // returned to clients.
+            await Room.update(currentRoom.id, { host_session: next.session_id });
           }
         }
-        return Response.json({ ok: true, host_session: hostSession });
+
+        const authoritativeRoom = await findRoom(room.code);
+        hostSession = authoritativeRoom?.host_session || hostSession;
+        const postHeartbeatPlayers = await playersOf(room.code);
+
+        if (hostSession !== room.host_session) {
+          const currentHost = postHeartbeatPlayers.find((p) => p.session_id === hostSession);
+          if (currentHost && !currentHost.is_host) await Player.update(currentHost.id, { is_host: true });
+          const stale = postHeartbeatPlayers.find((p) => p.is_host && p.session_id !== hostSession);
+          if (stale) await Player.update(stale.id, { is_host: false });
+        }
+
+        return Response.json({
+          ok: true,
+          host_session: hostSession,
+          active_session_ids: activePlayers(postHeartbeatPlayers, now).map((p) => p.session_id),
+          roster_session_ids: postHeartbeatPlayers.map((p) => p.session_id),
+        });
       }
 
       case 'leave': {

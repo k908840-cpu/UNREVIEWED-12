@@ -40,7 +40,14 @@ export default function Lobby() {
     setBusy(true); setError("");
     const res = await startGame();
     setBusy(false);
-    if (res?.error) { setError(res.error === "not_enough_players" ? `Need at least ${MIN_PLAYERS} active players` : "Couldn't start. Try again."); sfx.wrong(); return; }
+    if (res?.error) {
+      setError(
+        res.error === "not_enough_players" ? `Need at least ${MIN_PLAYERS} active players`
+          : res.error === "forbidden" ? "Host changed. Only the current Host can start."
+            : "Couldn't start. Try again.",
+      );
+      sfx.wrong(); return;
+    }
     sfx.reveal(); navigate("/reveal");
   };
 

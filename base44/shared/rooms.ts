@@ -6,6 +6,9 @@ export const MAX_PLAYERS = 8;
 export const MIN_PLAYERS = 4;
 // A player counts as "active" if they checked in within this window.
 export const RECONNECT_WINDOW_MS = 30000;
+// Keep host ownership stable through a missed heartbeat without changing
+// player eligibility for Start or gameplay.
+export const HOST_MIGRATION_GRACE_MS = 60000;
 // Rooms with no activity for this long are swept away.
 export const ROOM_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -22,12 +25,12 @@ export function makeCode() {
   return out;
 }
 
-export function isActive(player, now = Date.now()) {
+export function isActive(player, now = Date.now(), windowMs = RECONNECT_WINDOW_MS) {
   if (!player) return false;
   const ts = Date.parse(player.last_seen || "") || 0;
-  return now - ts < RECONNECT_WINDOW_MS;
+  return now - ts < windowMs;
 }
 
-export function activePlayers(players, now = Date.now()) {
-  return (players || []).filter((p) => isActive(p, now));
+export function activePlayers(players, now = Date.now(), windowMs = RECONNECT_WINDOW_MS) {
+  return (players || []).filter((p) => isActive(p, now, windowMs));
 }

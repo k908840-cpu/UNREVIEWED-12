@@ -295,7 +295,9 @@ export function GameProvider({ children }) {
       refreshPlayers({ force: true });
       return { ok: true };
     } catch (e) {
-      return { error: e?.response?.data?.error || "start_failed", active: e?.response?.data?.active };
+      const error = e?.response?.data?.error || "start_failed";
+      if (error === "forbidden") await refreshPlayers({ force: true });
+      return { error, active: e?.response?.data?.active };
     }
   }, [roomCode, sessionId, refreshPlayers]);
 
@@ -341,16 +343,27 @@ export function GameProvider({ children }) {
       });
     };
 
-    const refreshRoom = async () => {
-      try {
-        const list = await base44.entities.Room.filter({ code: roomCode });
-        if (active && list && list[0]) setRoom(list[0]);
-      } catch { /* transient */ }
+    const reconcileHeartbeat = (data) => {
+      syncHostSession(data?.host_session);
+
+      if (Array.isArray(data?.active_session_ids)) {
+        const activeIds = new Set(data.active_session_ids.filter((id) => typeof id === "string"));
+        setPlayers((current) => current.map((player) => {
+          const connected = activeIds.has(player.sessionId);
+          return player.connected === connected ? player : { ...player, connected };
+        }));
+      }
+
+      if (Array.isArray(data?.roster_session_ids)) {
+        const remoteIds = new Set(data.roster_session_ids.filter((id) => typeof id === "string"));
+        const localIds = new Set(playersRef.current.map((player) => player.sessionId));
+        const rosterChanged = remoteIds.size !== localIds.size || [...remoteIds].some((id) => !localIds.has(id));
+        if (rosterChanged) refreshPlayers();
+      }
     };
 
     if (rosterPrimedRoomRef.current === roomCode) rosterPrimedRoomRef.current = "";
     else fetchRoster();
-    refreshRoom();
 
     const unsubPlayers = base44.entities.RoomPlayer.subscribe((e) => {
       if (!active) return;
@@ -384,7 +397,7 @@ export function GameProvider({ children }) {
     const beat = async () => {
       try {
         const res = await base44.functions.invoke("room", { action: "heartbeat", code: roomCode, sessionId });
-        if (active) syncHostSession(res?.data?.host_session);
+        if (active) reconcileHeartbeat(res?.data || {});
       } catch {}
     };
     beat();
