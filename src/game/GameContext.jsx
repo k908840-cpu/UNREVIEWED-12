@@ -79,6 +79,7 @@ export function GameProvider({ children }) {
   const [chat, setChat] = useState([]);
 
   const seenSelfRef = useRef(false);
+  const roomStatusRef = useRef("");
   const playersRef = useRef([]);
   const rosterDebounceRef = useRef(null);
   const inFlightRosterRef = useRef(false);
@@ -127,6 +128,10 @@ export function GameProvider({ children }) {
       deferredJoinRosterReconciliationRoomRef.current = "";
     }
   }, [players]);
+
+  useEffect(() => {
+    roomStatusRef.current = room?.status || "";
+  }, [room?.status]);
 
   const setVolume = useCallback((v) => { setVol(v); setSfxVolume(v); }, []);
   const toggleMute = useCallback(() => setMutedState((m) => { const next = !m; setSfxMuted(next); return next; }), []);
@@ -595,6 +600,9 @@ export function GameProvider({ children }) {
       // same member through its authoritative roster read. Only an unknown
       // create changes membership locally; deletes always need reconciliation.
       if (e.type === "create") {
+        // The backend rejects joins while a game is playing, so a create
+        // delivered then is a delayed replay rather than new membership.
+        if (roomStatusRef.current === "playing") return;
         const alreadyKnown = d.session_id && playersRef.current.some((player) => player.sessionId === d.session_id);
         if (!alreadyKnown) requestRosterReconciliation();
         return;
@@ -611,6 +619,7 @@ export function GameProvider({ children }) {
       const d = e?.data || {};
       if (d.code !== roomCode) return;
       if (e.type === "delete" || d.status === "closed") { setLeftReason("closed"); return; }
+      roomStatusRef.current = d.status || roomStatusRef.current;
       setRoom(d);
       syncHostSession(d.host_session);
     });
