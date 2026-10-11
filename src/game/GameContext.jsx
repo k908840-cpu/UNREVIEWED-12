@@ -614,14 +614,23 @@ export function GameProvider({ children }) {
         if (active) reconcileHeartbeat(res?.data || {});
       } catch {}
     };
-    beat();
-    const beatTimer = setInterval(beat, HEARTBEAT_MS);
+    // Joining already records a fresh, connected player. Defer and stagger
+    // the first presence write so a full lobby does not send four expensive
+    // heartbeat transactions alongside its initial sync. The 4s maximum
+    // offset remains inside the 30s active-player window.
+    const heartbeatOffset = [...sessionId].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4000;
+    let beatTimer = null;
+    const firstBeatTimer = setTimeout(() => {
+      void beat();
+      beatTimer = setInterval(beat, HEARTBEAT_MS);
+    }, HEARTBEAT_MS + heartbeatOffset);
 
     return () => {
       active = false;
       if (typeof unsubPlayers === "function") unsubPlayers();
       if (typeof unsubRoom === "function") unsubRoom();
-      clearInterval(beatTimer);
+      clearTimeout(firstBeatTimer);
+      if (beatTimer) clearInterval(beatTimer);
       if (rosterDebounceRef.current) { clearTimeout(rosterDebounceRef.current); rosterDebounceRef.current = null; }
       if (backoffTimerRef.current) { clearTimeout(backoffTimerRef.current); backoffTimerRef.current = null; }
     };
