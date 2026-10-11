@@ -113,6 +113,7 @@ function delayedAdvanceCannotSkipTheNextServerPhase() {
   const writing = { phase: 'writing', phase_deadline: '2026-10-11T07:10:40.000Z' };
   const rating = { phase: 'rating', phase_deadline: '2026-10-11T07:10:50.000Z' };
   assert.equal(matchesAdvanceExpectation(writing, 'writing', writing.phase_deadline), true);
+  assert.equal(matchesAdvanceExpectation(writing, 'reveal', writing.phase_deadline), false);
   assert.equal(matchesAdvanceExpectation(rating, 'writing', writing.phase_deadline), false);
   assert.equal(matchesAdvanceExpectation(rating, 'rating', writing.phase_deadline), false);
 }

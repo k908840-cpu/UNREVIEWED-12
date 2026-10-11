@@ -503,8 +503,11 @@ export function GameProvider({ children }) {
     try {
       return await callRoom("advance", {
         force: opts.force || false,
-        expected_phase: gameState?.phase,
-        expected_deadline: gameState?.phase_deadline,
+        // A visual screen can briefly remain mounted after the room moves to
+        // its next phase. Callers may bind a force action to the phase their
+        // screen represents so that a stale click cannot skip live gameplay.
+        expected_phase: opts.expectedPhase || gameState?.phase,
+        expected_deadline: opts.expectedDeadline || gameState?.phase_deadline,
       });
     } finally {
       advanceInFlightRef.current = false;

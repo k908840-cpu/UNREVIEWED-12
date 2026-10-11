@@ -440,7 +440,10 @@ try {
   });
 
   await step('complete first gameplay round and reach Round 2', async () => {
-    await clickEnabled(pages[0].getByRole('button', { name: /^Continue/ }), 'subject reveal Continue button');
+    // Reveal auto-advances on its authoritative five-second deadline. The
+    // screenshots above can finish close to that deadline, so do not click an
+    // outgoing Continue button whose route animation may briefly outlive the
+    // reveal state.
     await waitForRoute(pages, '/write', 'writing phase');
     await submitAnswers(pages);
     await waitForRoute(pages, '/rate', 'rating phase');

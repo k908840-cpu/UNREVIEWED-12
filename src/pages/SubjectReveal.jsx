@@ -19,7 +19,7 @@ const RING = [
 ];
 
 export default function SubjectReveal() {
-  const { currentSubjectId, players, advance } = useGame();
+  const { currentSubjectId, players, gamePhase, advance } = useGame();
   const [stage, setStage] = useState(0);
   const subject = players.find((p) => p.id === currentSubjectId);
 
@@ -30,7 +30,13 @@ export default function SubjectReveal() {
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
 
-  const next = () => { sfx.whoosh(); advance({ force: true }); };
+  const next = () => {
+    // The outgoing reveal can remain visible briefly during route animation.
+    // Bind this action to reveal so it cannot force-advance a later phase.
+    if (gamePhase !== "reveal") return;
+    sfx.whoosh();
+    void advance({ force: true, expectedPhase: "reveal" });
+  };
 
   return (
     <div className="relative grid min-h-screen place-items-center overflow-hidden px-5 py-10">
@@ -104,6 +110,7 @@ export default function SubjectReveal() {
 
       <motion.button
         onClick={next}
+        disabled={gamePhase !== "reveal"}
         initial={{ opacity: 0 }} animate={{ opacity: stage >= 2 ? 1 : 0 }}
         transition={{ delay: 0.6 }}
         className="absolute bottom-8 left-1/2 -translate-x-1/2 rounded-full border-2 border-[hsl(var(--ink))] bg-primary px-6 py-3 font-display text-lg uppercase tracking-wide text-primary-foreground shadow-[0_5px_0_0_hsl(var(--ink))] hover:scale-105"
