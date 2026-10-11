@@ -81,6 +81,7 @@ export function GameProvider({ children }) {
 
   const seenSelfRef = useRef(false);
   const roomStatusRef = useRef("");
+  const roomPhaseRef = useRef("");
   const playersRef = useRef([]);
   const rosterDebounceRef = useRef(null);
   const inFlightRosterRef = useRef(false);
@@ -133,7 +134,8 @@ export function GameProvider({ children }) {
 
   useEffect(() => {
     roomStatusRef.current = room?.status || "";
-  }, [room?.status]);
+    roomPhaseRef.current = room?.game_state?.phase || "";
+  }, [room?.status, room?.game_state?.phase]);
 
   const setVolume = useCallback((v) => { setVol(v); setSfxVolume(v); }, []);
   const toggleMute = useCallback(() => setMutedState((m) => { const next = !m; setSfxMuted(next); return next; }), []);
@@ -143,6 +145,8 @@ export function GameProvider({ children }) {
     clearPendingRoomCode();
     activeRoomCodeRef.current = "";
     seenSelfRef.current = false;
+    roomStatusRef.current = "";
+    roomPhaseRef.current = "";
     rosterPrimedRoomRef.current = "";
     joinedRosterRoomRef.current = "";
     initialJoinHydrationRoomRef.current = "";
@@ -224,6 +228,7 @@ export function GameProvider({ children }) {
       if (!joinedRoom) throw new Error("join_failed");
       const hostNow = joinedRoom.host_session === sessionId;
       roomStatusRef.current = joinedRoom.status || "";
+      roomPhaseRef.current = joinedRoom.game_state?.phase || "";
       const joinedPlayer = data.player ? mapPlayer(data.player, sessionId, joinedRoom.host_session) : null;
       const joinedRoster = Array.isArray(data.players)
         ? data.players.map((player) => mapPlayer(player, sessionId, joinedRoom.host_session))
@@ -360,10 +365,16 @@ export function GameProvider({ children }) {
       // An unexpected response is transient. Do not turn a successful join
       // into an empty local roster while the next authoritative retry can run.
       if (data.error || !data.room || !Array.isArray(data.players)) return;
+      // Entity subscriptions can replay the lobby record after Start. A
+      // matching getRoster response that was initiated before Start can do the
+      // same. Room status is monotonic during gameplay, so never let a stale
+      // lobby snapshot reopen roster reconciliation after the game starts.
+      if (roomStatusRef.current === "playing" && roomPhaseRef.current !== "finished" && data.room.status === "lobby") return;
       const roster = data.players || [];
       const hostSession = data.room?.host_session;
       if (data.room) {
         roomStatusRef.current = data.room.status || roomStatusRef.current;
+        roomPhaseRef.current = data.room.game_state?.phase || roomPhaseRef.current;
         setRoom(data.room);
         setIsHost(hostSession === sessionId);
       }
@@ -428,6 +439,7 @@ export function GameProvider({ children }) {
       const data = res?.data || {};
       if (data.room) {
         roomStatusRef.current = data.room.status || roomStatusRef.current;
+        roomPhaseRef.current = data.room.game_state?.phase || roomPhaseRef.current;
         setRoom(data.room);
       }
       if (data.error) {
@@ -457,6 +469,7 @@ export function GameProvider({ children }) {
       if (data.error) return { error: data.error, active: data.active };
       if (data.room) {
         roomStatusRef.current = data.room.status || roomStatusRef.current;
+        roomPhaseRef.current = data.room.game_state?.phase || roomPhaseRef.current;
         setRoom(data.room);
       }
       return { ok: true };
@@ -647,7 +660,11 @@ export function GameProvider({ children }) {
       const d = e?.data || {};
       if (d.code !== roomCode) return;
       if (e.type === "delete" || d.status === "closed") { setLeftReason("closed"); return; }
+      // A delayed initial subscription snapshot may still describe the lobby
+      // after the start action has moved this room to playing.
+      if (roomStatusRef.current === "playing" && roomPhaseRef.current !== "finished" && d.status === "lobby") return;
       roomStatusRef.current = d.status || roomStatusRef.current;
+      roomPhaseRef.current = d.game_state?.phase || roomPhaseRef.current;
       setRoom(d);
       syncHostSession(d.host_session);
     });
