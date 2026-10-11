@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import React, { useState, useEffect, useRef } from "react";
+import { useLocation, useNavigate, useOutlet } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { MessageCircle, Home, Star, Settings as SettingsIcon } from "lucide-react";
 import { useGame } from "@/game/GameContext";
@@ -17,6 +17,31 @@ export default function Layout() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
+  const outlet = useOutlet();
+  const [displayedRoute, setDisplayedRoute] = useState(() => ({
+    pathname: location.pathname,
+    outlet,
+  }));
+  const [isExitingRoute, setIsExitingRoute] = useState(false);
+  const pendingRouteRef = useRef(null);
+
+  // Keep the current route element mounted for its entire exit animation.
+  // The next element is held outside AnimatePresence until onExitComplete;
+  // otherwise React Router can render it in the outgoing pathname-keyed
+  // container and then mount it again in the incoming container.
+  useEffect(() => {
+    if (location.pathname === displayedRoute.pathname) return;
+    pendingRouteRef.current = { pathname: location.pathname, outlet };
+    setIsExitingRoute(true);
+  }, [location.pathname, outlet, displayedRoute.pathname]);
+
+  const showPendingRoute = () => {
+    const pendingRoute = pendingRouteRef.current;
+    if (!pendingRoute) return;
+    pendingRouteRef.current = null;
+    setDisplayedRoute(pendingRoute);
+    setIsExitingRoute(false);
+  };
 
   // apply mode theme class to root
   useEffect(() => {
@@ -69,17 +94,19 @@ export default function Layout() {
       )}
 
       {/* page transitions */}
-      <AnimatePresence mode="wait">
-        <motion.main
-          key={location.pathname}
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }}
-          transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-          className="relative"
-        >
-          <Outlet />
-        </motion.main>
+      <AnimatePresence mode="wait" onExitComplete={showPendingRoute}>
+        {!isExitingRoute && (
+          <motion.main
+            key={displayedRoute.pathname}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+            className="relative"
+          >
+            {displayedRoute.outlet}
+          </motion.main>
+        )}
       </AnimatePresence>
 
       <AudioDirector />
