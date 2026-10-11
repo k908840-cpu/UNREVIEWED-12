@@ -18,7 +18,7 @@ const CARD_TONES = [
 ];
 
 export default function Prediction() {
-  const { currentSubjectId, players, answers, submitPrediction, phaseDeadline, phaseDuration, advance } = useGame();
+  const { currentSubjectId, players, answers, submitPrediction, phaseDeadline, phaseDuration } = useGame();
   const [selected, setSelected] = useState(null);
   const [locked, setLocked] = useState(false);
   const subject = players.find((p) => p.id === currentSubjectId);
@@ -34,8 +34,6 @@ export default function Prediction() {
     await submitPrediction(selected);
   };
 
-  const onExpire = () => advance();
-
   if (!isSubject) {
     return (
       <div className="relative grid min-h-screen place-items-center px-5 text-center text-[hsl(var(--ink))]">
@@ -48,7 +46,7 @@ export default function Prediction() {
           <p className="mt-2 max-w-sm mx-auto opacity-60">They're guessing which answer won. No peeking at the scores.</p>
           {phaseDeadline && (
             <div className="mt-5 flex justify-center">
-              <Timer seconds={phaseDuration || PRED_SECONDS} deadline={phaseDeadline} onExpire={onExpire} size={52} />
+              <Timer seconds={phaseDuration || PRED_SECONDS} deadline={phaseDeadline} size={52} />
             </div>
           )}
         </div>
@@ -63,7 +61,7 @@ export default function Prediction() {
       <div className="relative text-center">
         <div className="flex items-center justify-between">
           <div className="flex justify-center"><Stamp tone="yellow" rotate={-3}>Ratings locked</Stamp></div>
-          {phaseDeadline && <Timer seconds={phaseDuration || PRED_SECONDS} deadline={phaseDeadline} onExpire={onExpire} size={48} />}
+          {phaseDeadline && <Timer seconds={phaseDuration || PRED_SECONDS} deadline={phaseDeadline} size={48} />}
         </div>
         <h1 className="mt-4 text-display text-4xl leading-none sm:text-6xl">THE RATINGS ARE LOCKED.</h1>
         <div className="mt-1 flex items-center justify-center gap-3">

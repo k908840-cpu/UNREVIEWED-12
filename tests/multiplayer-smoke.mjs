@@ -15,13 +15,37 @@ const RESULTS = path.join(ROOT, 'test-results', 'multiplayer');
 
 const consoleErrors = [];
 const failedRoomRequests = [];
+const roomRequests = [];
 const screenshots = [];
 let currentStep = 'initializing';
+let roomEventSequence = 0;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const route = (page) => new URL(page.url()).pathname.replace(/\/$/, '') || '/';
 const clean = (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 const isRoomRequest = (url) => /(?:\/functions\/room|\/api\/.*\/functions\/room)(?:[/?#]|$)/i.test(url);
+const ROOM_ACTIONS = new Set(['create', 'lookup', 'getRoster', 'join', 'heartbeat', 'leave', 'kick', 'config', 'start', 'submit_answer', 'submit_rating', 'submit_prediction', 'advance', 'reset_to_lobby', 'close']);
+
+function roomAction(request) {
+  try {
+    const action = JSON.parse(request.postData() || '{}').action;
+    return ROOM_ACTIONS.has(action) ? action : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+function roomResponseSummary(body) {
+  try {
+    const data = JSON.parse(body || '{}');
+    return {
+      error: typeof data?.error === 'string' ? data.error : null,
+      phase: typeof data?.room?.game_state?.phase === 'string' ? data.room.game_state.phase : null,
+    };
+  } catch {
+    return { error: null, phase: null };
+  }
+}
 
 async function waitUntil(check, description, timeout = TIMEOUT) {
   const deadline = Date.now() + timeout;
@@ -59,13 +83,42 @@ function observe(page, player) {
   });
   page.on('pageerror', (error) => consoleErrors.push({ player, type: 'pageerror', text: error.message, stack: error.stack, at: new Date().toISOString() }));
   page.on('requestfailed', (request) => {
-    if (isRoomRequest(request.url())) failedRoomRequests.push({ player, type: 'requestfailed', url: request.url(), method: request.method(), failure: request.failure(), at: new Date().toISOString() });
+    if (isRoomRequest(request.url())) failedRoomRequests.push({ player, type: 'requestfailed', action: roomAction(request), url: request.url(), method: request.method(), failure: request.failure(), at: new Date().toISOString() });
+  });
+  page.on('request', (request) => {
+    if (!isRoomRequest(request.url())) return;
+    const event = {
+      sequence: ++roomEventSequence,
+      player,
+      type: 'request',
+      action: roomAction(request),
+      method: request.method(),
+      at: new Date().toISOString(),
+    };
+    roomRequests.push(event);
   });
   page.on('response', async (response) => {
-    if (!isRoomRequest(response.url()) || response.ok()) return;
+    if (!isRoomRequest(response.url())) return;
     let body = '';
     try { body = (await response.text()).slice(0, 2_000); } catch { body = '<response body unavailable>'; }
-    failedRoomRequests.push({ player, type: 'http-error', url: response.url(), method: response.request().method(), status: response.status(), statusText: response.statusText(), body, at: new Date().toISOString() });
+    const summary = roomResponseSummary(body);
+    const action = roomAction(response.request());
+    const event = {
+      sequence: ++roomEventSequence,
+      player,
+      type: 'response',
+      action,
+      method: response.request().method(),
+      status: response.status(),
+      phase: summary.phase,
+      outcome: response.ok() && !summary.error ? 'success' : 'failure',
+      error: summary.error,
+      at: new Date().toISOString(),
+    };
+    roomRequests.push(event);
+    if (!response.ok()) {
+      failedRoomRequests.push({ ...event, type: 'http-error', url: response.url(), statusText: response.statusText(), body });
+    }
   });
 }
 
@@ -222,12 +275,37 @@ async function waitForWritingRoles(pages) {
     .map((state) => ({ index: state.index, editor: pages[state.index].getByPlaceholder('Write something funny…') }));
 }
 
+async function waitForAnswerAcceptance(page, index, eventSequenceBeforeClick) {
+  const deadline = Date.now() + TIMEOUT;
+  while (Date.now() < deadline) {
+    const answerResponse = roomRequests.find((event) => (
+      event.sequence > eventSequenceBeforeClick
+      && event.player === PLAYERS[index]
+      && event.type === 'response'
+      && event.action === 'submit_answer'
+    ));
+    if (answerResponse?.outcome === 'failure') {
+      throw new Error(`${PLAYERS[index]}'s submit_answer failed: status=${answerResponse.status}, error=${answerResponse.error || 'unavailable'}, phase=${answerResponse.phase || 'unavailable'}`);
+    }
+    // The last accepted writer can receive a room already advanced to Rating,
+    // so the Writing receipt will never mount. A successful, action-labelled
+    // server response is the authoritative confirmation in that case.
+    if (answerResponse?.outcome === 'success'
+      || await visible(page.getByText('Submitted. Now we wait for the others…', { exact: true }))) {
+      return;
+    }
+    await wait(POLL);
+  }
+  throw new Error(`Timed out after ${TIMEOUT / 1000}s waiting for ${PLAYERS[index]}'s answer acceptance.`);
+}
+
 async function submitAnswers(pages) {
   const writers = await waitForWritingRoles(pages);
   await Promise.all(writers.map(async ({ index, editor }) => {
     await editor.fill(`Round one smoke review from ${PLAYERS[index]}.`);
+    const eventSequenceBeforeClick = roomEventSequence;
     await clickEnabled(pages[index].getByRole('button', { name: /^Submit$/ }), `${PLAYERS[index]}'s Submit button`);
-    await waitUntil(() => visible(pages[index].getByText('Submitted. Now we wait for the others…', { exact: true })), `${PLAYERS[index]}'s answer confirmation`);
+    await waitForAnswerAcceptance(pages[index], index, eventSequenceBeforeClick);
   }));
 }
 
@@ -300,6 +378,7 @@ async function writeArtifacts(summary) {
   await Promise.all([
     writeFile(path.join(RESULTS, `${RUN_ID}-summary.json`), `${JSON.stringify(summary, null, 2)}\n`),
     writeFile(path.join(RESULTS, `${RUN_ID}-console-errors.json`), `${JSON.stringify(consoleErrors, null, 2)}\n`),
+    writeFile(path.join(RESULTS, `${RUN_ID}-room-requests.json`), `${JSON.stringify(roomRequests, null, 2)}\n`),
     writeFile(path.join(RESULTS, `${RUN_ID}-failed-room-requests.json`), `${JSON.stringify(failedRoomRequests, null, 2)}\n`),
   ]);
 }
@@ -366,7 +445,7 @@ try {
     status: failure ? 'failed' : 'passed', startedAt, completedAt: new Date().toISOString(), appUrl: APP_URL,
     roomCode, players: PLAYERS, lastStep: currentStep,
     failure: failure ? { message: failure.message, stack: failure.stack } : null,
-    artifacts: { screenshots, consoleErrors, failedRoomRequests },
+    artifacts: { screenshots, consoleErrors, roomRequests, failedRoomRequests },
   };
   await writeArtifacts(summary);
   if (failure) {

@@ -46,7 +46,7 @@ export default function Rating() {
 
       <div className="mt-4 flex items-center justify-between">
         <span className="font-heading text-xs font-bold uppercase tracking-widest opacity-60">Answer {ratingIndex + 1} of {answers.length}</span>
-        <Timer seconds={phaseDuration || RATE_SECONDS} deadline={phaseDeadline} onExpire={onExpire} size={52} />
+        <Timer seconds={phaseDuration || RATE_SECONDS} deadline={phaseDeadline} size={52} />
       </div>
 
       <div className="mt-4 rounded-full border-2 border-[hsl(var(--ink))] bg-white px-4 py-2 text-center">

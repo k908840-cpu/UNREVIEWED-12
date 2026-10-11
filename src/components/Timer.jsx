@@ -6,8 +6,9 @@ import { sfx, useAudioSettings } from "@/lib/sound";
 // Countdown timer with ring + numeric readout. When `deadline` (ISO) is
 // provided, counts down to that shared timestamp — so every client sees
 // approximately the same remaining time. `seconds` is the total duration
-// used for the ring percentage. Fires onExpire at 0.
-export default function Timer({ seconds = 30, deadline, onExpire, running = true, accent = "primary", size = 64, strokeWidth = 6, showSeconds = true, className }) {
+// used for the ring percentage. Phase advancement is coordinated by
+// GameContext; a display timer never mutates the room on its own.
+export default function Timer({ seconds = 30, deadline, running = true, accent = "primary", size = 64, strokeWidth = 6, showSeconds = true, className }) {
   const settings = useAudioSettings();
   const [remaining, setRemaining] = useState(deadline ? Math.max(0, Math.round((Date.parse(deadline) - Date.now()) / 1000)) : seconds);
   const firedRef = useRef(false);
@@ -21,7 +22,7 @@ export default function Timer({ seconds = 30, deadline, onExpire, running = true
         const rem = Math.max(0, Math.round((Date.parse(deadline) - Date.now()) / 1000));
         setRemaining(rem);
         if (rem <= 5 && rem > 0) sfx.tick(true);
-        if (rem === 0 && !firedRef.current) { firedRef.current = true; sfx.countdownEnd(); onExpire?.(); }
+        if (rem === 0 && !firedRef.current) { firedRef.current = true; sfx.countdownEnd(); }
       };
       update();
       const id = setInterval(update, 1000);
@@ -33,12 +34,12 @@ export default function Timer({ seconds = 30, deadline, onExpire, running = true
       setRemaining((r) => {
         const next = Math.max(0, r - 1);
         if (next <= 5 && next > 0) sfx.tick(true);
-        if (next === 0 && !firedRef.current) { firedRef.current = true; sfx.countdownEnd(); onExpire?.(); }
+        if (next === 0 && !firedRef.current) { firedRef.current = true; sfx.countdownEnd(); }
         return next;
       });
     }, 1000);
     return () => clearInterval(id);
-  }, [running, onExpire, deadline, seconds]);
+  }, [running, deadline, seconds]);
 
   if (!settings.showTimer) return null;
 

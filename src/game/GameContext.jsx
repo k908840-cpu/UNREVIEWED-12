@@ -7,6 +7,8 @@ import {
   getSessionId, getActiveRoomCode, setActiveRoomCode, clearActiveRoom,
   getPendingRoomCode, setPendingRoomCode, clearPendingRoomCode,
 } from "@/lib/session";
+import { advanceFallbackDelay, createAdvanceCoordinator, phaseDeadlineKey } from "./advanceCoordinator";
+import { createAnswerSubmissionCoordinator } from "./answerSubmissionCoordinator";
 
 const GameContext = createContext(null);
 
@@ -88,6 +90,26 @@ export function GameProvider({ children }) {
   const initialJoinHydrationInFlightRoomRef = useRef("");
   const postJoinRosterHydratedRoomRef = useRef("");
   const deferredJoinRosterReconciliationRoomRef = useRef("");
+  const callRoomRef = useRef(null);
+  const advanceRequestRef = useRef(null);
+  const advanceInFlightRef = useRef(false);
+  const answerRequestRef = useRef(null);
+  const answerReconcileRef = useRef(null);
+  const advanceCoordinatorRef = useRef(null);
+  const answerSubmissionCoordinatorRef = useRef(null);
+  const answerRoundKeyRef = useRef("");
+
+  if (!advanceCoordinatorRef.current) {
+    advanceCoordinatorRef.current = createAdvanceCoordinator({
+      send: () => advanceRequestRef.current?.() || { error: "advance_unavailable" },
+    });
+  }
+  if (!answerSubmissionCoordinatorRef.current) {
+    answerSubmissionCoordinatorRef.current = createAnswerSubmissionCoordinator({
+      submit: (text) => answerRequestRef.current?.(text) || { error: "submission_unavailable", ambiguous: true },
+      reconcile: () => answerReconcileRef.current?.() || { error: "reconciliation_unavailable", ambiguous: true },
+    });
+  }
 
   // Keep playersRef in sync for the realtime subscription's meaningful-change check.
   useEffect(() => {
@@ -116,6 +138,9 @@ export function GameProvider({ children }) {
     initialJoinHydrationInFlightRoomRef.current = "";
     postJoinRosterHydratedRoomRef.current = "";
     deferredJoinRosterReconciliationRoomRef.current = "";
+    answerRoundKeyRef.current = "";
+    advanceCoordinatorRef.current?.reset();
+    answerSubmissionCoordinatorRef.current?.reset();
     if (rosterDebounceRef.current) { clearTimeout(rosterDebounceRef.current); rosterDebounceRef.current = null; }
     if (backoffTimerRef.current) { clearTimeout(backoffTimerRef.current); backoffTimerRef.current = null; }
     backoffRef.current = 0; inFlightRosterRef.current = false;
@@ -365,12 +390,27 @@ export function GameProvider({ children }) {
     if (!roomCode) return { error: "no_room" };
     try {
       const res = await base44.functions.invoke("room", { action, sessionId, code: roomCode, ...extra });
-      if (res?.data?.room) setRoom(res.data.room);
-      return res?.data || {};
+      const data = res?.data || {};
+      if (data.room) setRoom(data.room);
+      if (data.error) {
+        return {
+          ...data,
+          retryable: isRateLimited(data),
+          ambiguous: false,
+        };
+      }
+      return data;
     } catch (e) {
-      return { error: e?.response?.data?.error || e?.message || "error" };
+      const status = Number(e?.response?.status) || null;
+      return {
+        error: e?.response?.data?.error || e?.message || "error",
+        status,
+        retryable: status === null || status === 429 || status >= 500,
+        ambiguous: status === null || status === 429 || status >= 500,
+      };
     }
   }, [roomCode, sessionId]);
+  callRoomRef.current = callRoom;
 
   const startGame = useCallback(async () => {
     try {
@@ -387,10 +427,74 @@ export function GameProvider({ children }) {
     }
   }, [roomCode, sessionId, refreshPlayers]);
 
-  const submitAnswer = useCallback((text) => callRoom("submit_answer", { text }), [callRoom]);
+  const roomHasMyAnswer = useCallback((candidate) => (
+    Array.isArray(candidate?.game_state?.answers)
+    && candidate.game_state.answers.some((answer) => answer.author === sessionId)
+  ), [sessionId]);
+
+  const reconcileAnswerSubmission = useCallback(async () => {
+    if (!roomCode) return { error: "no_room", ambiguous: false };
+    try {
+      const data = await requestRoster(roomCode);
+      if (data?.room) setRoom(data.room);
+      if (data?.error || !data?.room) {
+        return {
+          error: data?.error || "reconciliation_failed",
+          ambiguous: !data?.error || isRateLimited(data),
+        };
+      }
+      return { accepted: roomHasMyAnswer(data.room), room: data.room };
+    } catch (e) {
+      return {
+        error: e?.response?.data?.error || e?.message || "reconciliation_failed",
+        ambiguous: true,
+      };
+    }
+  }, [roomCode, requestRoster, roomHasMyAnswer]);
+
+  const sendAnswer = useCallback(async (text) => {
+    const result = await callRoom("submit_answer", { text });
+    if (roomHasMyAnswer(result?.room)) return { accepted: true, room: result.room };
+    return result?.error
+      ? result
+      : { error: "submission_unconfirmed", ambiguous: true, retryable: true };
+  }, [callRoom, roomHasMyAnswer]);
+  answerRequestRef.current = sendAnswer;
+  answerReconcileRef.current = reconcileAnswerSubmission;
+
+  const submitAnswer = useCallback((text) => answerSubmissionCoordinatorRef.current.submit(text), []);
   const submitRating = useCallback((answerId, stars) => callRoom("submit_rating", { answer_id: answerId, stars }), [callRoom]);
   const submitPrediction = useCallback((answerId) => callRoom("submit_prediction", { answer_id: answerId }), [callRoom]);
-  const advance = useCallback((opts = {}) => callRoom("advance", { force: opts.force || false }), [callRoom]);
+  const advance = useCallback(async (opts = {}) => {
+    if (advanceInFlightRef.current) return { error: "advance_pending", retryable: false };
+    const gameState = room?.game_state;
+    advanceInFlightRef.current = true;
+    try {
+      return await callRoom("advance", {
+        force: opts.force || false,
+        expected_phase: gameState?.phase,
+        expected_deadline: gameState?.phase_deadline,
+      });
+    } finally {
+      advanceInFlightRef.current = false;
+    }
+  }, [callRoom, room?.game_state?.phase, room?.game_state?.phase_deadline]);
+  advanceRequestRef.current = advance;
+
+  // A writer submits once per round. Reset the local submission guard only
+  // when the authoritative room enters a distinct Writing round.
+  useEffect(() => {
+    const gameState = room?.game_state;
+    if (gameState?.phase !== "writing") {
+      answerRoundKeyRef.current = "";
+      return;
+    }
+    const key = `${roomCode}:${gameState.round_index ?? 0}:${gameState.current_subject ?? ""}`;
+    if (key && key !== answerRoundKeyRef.current) {
+      answerRoundKeyRef.current = key;
+      answerSubmissionCoordinatorRef.current?.reset();
+    }
+  }, [roomCode, room?.game_state?.phase, room?.game_state?.round_index, room?.game_state?.current_subject]);
 
   const endGame = useCallback(async () => {
     await callRoom("close");
@@ -529,15 +633,31 @@ export function GameProvider({ children }) {
     if (target && window.location.pathname !== target) navigate(target);
   }, [room?.status, room?.game_state?.phase, navigate]);
 
-  // ---- auto-advance when shared deadline expires ----
+  // ---- coordinated deadline advancement ----
+  // The server validates the phase/deadline. Each client calculates the same
+  // owner/fallback order, so an active non-host can still move a room forward
+  // if the host disconnects, without every browser polling advance per second.
   useEffect(() => {
-    if (!room?.game_state?.phase_deadline || room.status !== "playing") return;
-    const deadline = Date.parse(room.game_state.phase_deadline);
-    const id = setInterval(() => {
-      if (Date.now() >= deadline) advance();
-    }, 1000);
-    return () => clearInterval(id);
-  }, [room?.game_state?.phase_deadline, room?.status, advance]);
+    const gameState = room?.game_state;
+    if (!gameState?.phase_deadline || room.status !== "playing") {
+      advanceCoordinatorRef.current?.reset();
+      return undefined;
+    }
+
+    const deadline = Date.parse(gameState.phase_deadline);
+    const key = phaseDeadlineKey(roomCode, gameState);
+    if (!key || Number.isNaN(deadline)) return undefined;
+    const coordinator = advanceCoordinatorRef.current;
+    coordinator.observe(key);
+    const delay = advanceFallbackDelay(sessionId, players);
+    const requestAdvance = () => { void coordinator.request(key, delay); };
+    const timer = setTimeout(requestAdvance, Math.max(0, deadline - Date.now()));
+    return () => clearTimeout(timer);
+  }, [roomCode, room?.status, room?.game_state?.phase, room?.game_state?.phase_deadline, room?.game_state?.rating_index, players, sessionId]);
+
+  useEffect(() => () => {
+    advanceCoordinatorRef.current?.dispose();
+  }, []);
 
   // ---- return to lobby when host resets a finished game ----
   useEffect(() => {

@@ -1,6 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.44';
 import { makeCode, normalizeCode, MAX_PLAYERS, MIN_PLAYERS, HOST_MIGRATION_GRACE_MS, isActive, activePlayers } from '../../shared/rooms.ts';
-import { PHASE_DURATIONS, LENGTH_CYCLES, buildSubjectOrder, selectPrompt, tryAdvance, doAdvance } from '../../shared/game.ts';
+import { PHASE_DURATIONS, LENGTH_CYCLES, buildSubjectOrder, selectPrompt, tryAdvance, doAdvance, matchesAdvanceExpectation } from '../../shared/game.ts';
 
 const LENGTHS = ['quick', 'standard', 'party', 'endless'];
 const rid = () => Math.random().toString(36).slice(2, 9);
@@ -299,6 +299,9 @@ export default async function (req) {
         if (!room || room.status !== 'playing') return Response.json({ error: 'not_found' }, { status: 404 });
         const gs = room.game_state;
         if (!gs) return Response.json({ error: 'no_game' }, { status: 400 });
+        if (!matchesAdvanceExpectation(gs, body.expected_phase, body.expected_deadline)) {
+          return Response.json({ room, advanced: false, stale: true });
+        }
         const players = await playersOf(room.code);
         const isHost = room.host_session === sessionId;
         const force = body.force === true;

@@ -14,6 +14,7 @@ export default function Writing() {
   const { currentSubjectId, players, currentPrompt, submitAnswer, submittedCount, isHost, myAnswerId, phaseDeadline, phaseDuration, advance } = useGame();
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
   const subject = players.find((p) => p.id === currentSubjectId);
   const you = players.find((p) => p.isYou);
   const isSubject = you?.id === currentSubjectId;
@@ -26,10 +27,19 @@ export default function Writing() {
   const submit = async () => {
     if (!text.trim() || submitted || submitting) return;
     setSubmitting(true);
-    await submitAnswer(text);
+    setSubmitError("");
+    const result = await submitAnswer(text);
     setSubmitting(false);
-    setText("");
-    sfx.submit();
+    if (result?.accepted) {
+      setText("");
+      sfx.submit();
+      return;
+    }
+    setSubmitError(
+      result?.ambiguous
+        ? "We couldn't confirm that answer yet. It is still here — try again in a moment."
+        : "That answer was not accepted. It is still here — try again.",
+    );
   };
 
   const onExpire = () => advance();
@@ -48,7 +58,7 @@ export default function Writing() {
             <p className="font-display text-lg leading-none">{subject?.nickname}</p>
           </div>
         </div>
-        <Timer seconds={phaseDuration || WRITE_SECONDS} deadline={phaseDeadline} onExpire={onExpire} size={56} />
+        <Timer seconds={phaseDuration || WRITE_SECONDS} deadline={phaseDeadline} size={56} />
       </div>
 
       <motion.div
@@ -88,6 +98,12 @@ export default function Writing() {
             </div>
           </div>
           <p className="mt-2 text-center text-sm italic opacity-60">Keep it short. They're judging you.</p>
+
+          {submitError && (
+            <p role="alert" className="mt-3 rounded-xl border-2 border-[hsl(var(--mode-adult))] bg-white px-3 py-2 text-center text-sm font-medium text-[hsl(var(--ink))]">
+              {submitError}
+            </p>
+          )}
 
           <AnimatePresence>
             {submitted ? (
