@@ -2,8 +2,8 @@
 // remains authoritative: this only avoids sending the same observation over
 // and over while waiting for its authoritative response or a realtime update.
 
-export const ADVANCE_RETRY_DELAYS_MS = [2_000, 6_000, 15_000];
-export const ADVANCE_FALLBACK_STEP_MS = 4_000;
+export const ADVANCE_RETRY_DELAYS_MS = [6_000, 18_000];
+export const ADVANCE_FALLBACK_STEP_MS = 12_000;
 
 export function phaseDeadlineKey(roomCode, gameState) {
   if (!roomCode || !gameState?.phase || !gameState?.phase_deadline) return "";
@@ -15,12 +15,14 @@ export function phaseDeadlineKey(roomCode, gameState) {
 // This is deliberately not host-only, so a disconnected host cannot strand a
 // room at a deadline.
 export function advanceFallbackDelay(sessionId, players) {
-  const ids = [...new Set((players || [])
-    .filter((player) => player.connected)
-    .map((player) => player.sessionId)
-    .filter(Boolean))];
+  const active = (players || []).filter((player) => player.connected && player.sessionId);
+  const ids = [...new Set(active.map((player) => player.sessionId))].sort();
+  const hostId = active.find((player) => player.isHost)?.sessionId;
+  if (hostId && ids.includes(hostId)) {
+    ids.splice(ids.indexOf(hostId), 1);
+    ids.unshift(hostId);
+  }
   if (!ids.includes(sessionId)) ids.push(sessionId);
-  ids.sort();
   return Math.max(0, ids.indexOf(sessionId)) * ADVANCE_FALLBACK_STEP_MS;
 }
 

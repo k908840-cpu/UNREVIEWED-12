@@ -79,6 +79,16 @@ async function simultaneousClientsUseOwnerAndFallbackOrder() {
   assert.deepEqual(calls, ['alpha'], 'standby clients must cancel their old-phase callbacks');
 }
 
+function activeHostIsPreferredBeforeFallbacks() {
+  const players = [
+    { sessionId: 'alpha', connected: true },
+    { sessionId: 'bravo-host', connected: true, isHost: true },
+    { sessionId: 'charlie', connected: true },
+  ];
+  assert.equal(advanceFallbackDelay('bravo-host', players), 0, 'the active host should make the first deadline request');
+  assert.equal(advanceFallbackDelay('alpha', players), ADVANCE_FALLBACK_STEP_MS, 'non-hosts must remain delayed fallbacks');
+}
+
 async function delayedAdvanceResponseStaysSingleFlightAndRetriesAreBounded() {
   const scheduler = createScheduler();
   let calls = 0;
@@ -192,6 +202,7 @@ async function ambiguousAnswerResponseDoesNotDuplicate() {
 
 await duplicateDeadlineCallbacksAreCoalesced();
 await simultaneousClientsUseOwnerAndFallbackOrder();
+activeHostIsPreferredBeforeFallbacks();
 await delayedAdvanceResponseStaysSingleFlightAndRetriesAreBounded();
 delayedAdvanceCannotSkipTheNextServerPhase();
 await disconnectedHostDoesNotStrandFallback();

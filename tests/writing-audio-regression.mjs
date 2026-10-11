@@ -17,7 +17,11 @@ class FakeGain {
 
 class FakeOscillator {
   constructor() {
-    this.frequency = { setValueAtTime() {} };
+    this.frequency = {
+      setValueAtTime(value) {
+        if (!Number.isFinite(value)) throw new TypeError('frequency must be finite');
+      },
+    };
   }
 
   connect(target) { return target; }
@@ -46,16 +50,18 @@ globalThis.window = {
   AudioContext: FakeAudioContext,
   localStorage: { getItem: () => null, setItem() {} },
 };
-// Run the scheduler's first Writing beat synchronously. That beat uses the
-// scalar N.C4 stab entry which previously caused .forEach() to throw.
+// Run each track's first beat synchronously. Writing contains scalar stab
+// entries; prediction and results also exercise their lower/upper note ranges.
 globalThis.setInterval = (callback) => { callback(); return 1; };
 globalThis.clearInterval = () => {};
 globalThis.setTimeout = (callback) => { callback(); return 1; };
 
 try {
   const { music } = await import(new URL('../src/lib/sound.js', import.meta.url));
-  assert.doesNotThrow(() => music.play('writing'));
-  music.stop();
+  for (const track of ['lobby', 'writing', 'rating', 'prediction', 'results']) {
+    assert.doesNotThrow(() => music.play(track));
+    music.stop();
+  }
   console.log('Writing audio regression passed.');
 } finally {
   globalThis.window = originalWindow;

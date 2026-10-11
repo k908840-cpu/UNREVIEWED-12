@@ -377,10 +377,13 @@ async function finishRoundAndEnterRoundTwo(pages) {
   await rateRound(pages);
   await waitForRoute(pages, '/predict', 'the subject prediction phase');
   let subjectIndex = -1;
+  let firstPredictionChoice = null;
   await waitUntil(async () => {
     for (let index = 0; index < pages.length; index += 1) {
-      if (await visible(pages[index].getByRole('button', { name: /Lock it in/i }))) {
+      const choice = pages[index].getByRole('button').filter({ hasText: /^A\b/ });
+      if (await visible(choice)) {
         subjectIndex = index;
+        firstPredictionChoice = choice;
         return true;
       }
     }
@@ -388,7 +391,7 @@ async function finishRoundAndEnterRoundTwo(pages) {
   }, 'prediction choices to mount for the subject');
   await screenshot(pages, 'prediction');
   // Prediction.jsx labels its cards A, B, C. Select card A by that rendered marker.
-  await clickEnabled(pages[subjectIndex].getByRole('button').filter({ hasText: /^A\b/ }), 'first prediction choice');
+  await clickEnabled(firstPredictionChoice, 'first prediction choice');
   await clickEnabled(pages[subjectIndex].getByRole('button', { name: /Lock it in/i }), 'Lock it in button');
   await waitForRoute(pages, '/results', 'Round Results');
   await screenshot(pages, 'round-results');
