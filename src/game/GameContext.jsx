@@ -591,8 +591,15 @@ export function GameProvider({ children }) {
       if (!active) return;
       const d = e?.data || {};
       if (d.room_code && d.room_code !== roomCode) return;
-      // create/delete = player joined/left → refresh
-      if (e.type === "create" || e.type === "delete") { requestRosterReconciliation(); return; }
+      // Realtime can replay a create after this client already received the
+      // same member through its authoritative roster read. Only an unknown
+      // create changes membership locally; deletes always need reconciliation.
+      if (e.type === "create") {
+        const alreadyKnown = d.session_id && playersRef.current.some((player) => player.sessionId === d.session_id);
+        if (!alreadyKnown) requestRosterReconciliation();
+        return;
+      }
+      if (e.type === "delete") { requestRosterReconciliation(); return; }
       // RoomPlayer updates are heartbeat/presence writes. Membership is
       // authoritative through create/delete events; connected state is
       // reconciled from each caller's heartbeat response. Fetching the full
