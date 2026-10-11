@@ -22,6 +22,10 @@ const ROSTER_DEBOUNCE_MS = 400;
 // response, and React's initial subscription snapshot. Reconcile once, then
 // coalesce follow-up events long enough to keep gameplay transitions quiet.
 const ROSTER_MIN_REQUEST_INTERVAL_MS = 10000;
+// A join response is a point-in-time roster snapshot. While the room is still
+// open to new players, reconcile it periodically rather than reacting to every
+// delayed subscription replay. This timer is always stopped at game start.
+const LOBBY_ROSTER_SYNC_MS = 5000;
 // Exponential backoff for rate-limit errors (ms).
 const BACKOFF_BASE_MS = 2000;
 const BACKOFF_MAX_MS = 30000;
@@ -641,6 +645,10 @@ export function GameProvider({ children }) {
       // transition.
       if (e.type === "create") {
         const createdSessionId = typeof d.session_id === "string" ? d.session_id : "";
+        // Anonymous clients can receive subscription create events without a
+        // usable player payload. Join already supplied a server roster; defer
+        // those malformed events to the bounded lobby reconciliation below.
+        if (!createdSessionId && joinedRosterRoomRef.current === roomCode) return;
         setTimeout(() => {
           if (!active || roomStatusRef.current === "playing") return;
           if (createdSessionId && playersRef.current.some((player) => player.sessionId === createdSessionId)) return;
@@ -686,12 +694,26 @@ export function GameProvider({ children }) {
       beatTimer = setInterval(beat, HEARTBEAT_MS);
     }, HEARTBEAT_MS + heartbeatOffset);
 
+    const syncLobbyRoster = () => {
+      if (!active || roomStatusRef.current !== "lobby") return;
+      fetchRosterRef.current(roomCode);
+    };
+    let lobbySyncTimer = null;
+    const firstLobbySyncTimer = setTimeout(() => {
+      syncLobbyRoster();
+      if (roomStatusRef.current === "lobby") {
+        lobbySyncTimer = setInterval(syncLobbyRoster, ROSTER_MIN_REQUEST_INTERVAL_MS);
+      }
+    }, LOBBY_ROSTER_SYNC_MS);
+
     return () => {
       active = false;
       if (typeof unsubPlayers === "function") unsubPlayers();
       if (typeof unsubRoom === "function") unsubRoom();
       clearTimeout(firstBeatTimer);
       if (beatTimer) clearInterval(beatTimer);
+      clearTimeout(firstLobbySyncTimer);
+      if (lobbySyncTimer) clearInterval(lobbySyncTimer);
       if (rosterDebounceRef.current) { clearTimeout(rosterDebounceRef.current); rosterDebounceRef.current = null; }
       if (backoffTimerRef.current) { clearTimeout(backoffTimerRef.current); backoffTimerRef.current = null; }
     };
