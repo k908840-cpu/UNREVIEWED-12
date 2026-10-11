@@ -607,10 +607,16 @@ export function GameProvider({ children }) {
       if (d.room_code && d.room_code !== roomCode) return;
       // Membership changes still use the server-authoritative roster. A
       // create can be replayed after the Room event that starts a game, so
-      // defer it long enough to discard that stale replay.
+      // defer it long enough to discard that stale replay. Replayed creates
+      // contain an already-known session ID; they are not a membership change
+      // and must not make every client read the roster again during a phase
+      // transition.
       if (e.type === "create") {
+        const createdSessionId = typeof d.session_id === "string" ? d.session_id : "";
         setTimeout(() => {
-          if (active && roomStatusRef.current !== "playing") requestRosterReconciliation();
+          if (!active || roomStatusRef.current === "playing") return;
+          if (createdSessionId && playersRef.current.some((player) => player.sessionId === createdSessionId)) return;
+          requestRosterReconciliation();
         }, ROSTER_DEBOUNCE_MS);
         return;
       }
