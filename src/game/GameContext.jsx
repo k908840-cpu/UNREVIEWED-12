@@ -291,7 +291,18 @@ export function GameProvider({ children }) {
     }
     const now = Date.now();
     const previous = lastRosterRequestRef.current;
-    if (previous.code === code && now - previous.at < ROSTER_MIN_REQUEST_INTERVAL_MS) return;
+    if (previous.code === code && now - previous.at < ROSTER_MIN_REQUEST_INTERVAL_MS) {
+      // Keep the latest membership event rather than dropping it. This is
+      // important when several players join within one coalescing window.
+      if (!rosterDebounceRef.current && !backoffTimerRef.current) {
+        const delay = ROSTER_MIN_REQUEST_INTERVAL_MS - (now - previous.at);
+        rosterDebounceRef.current = setTimeout(() => {
+          rosterDebounceRef.current = null;
+          fetchRosterRef.current(code);
+        }, delay);
+      }
+      return;
+    }
     lastRosterRequestRef.current = { code, at: now };
     inFlightRosterRef.current = true;
     const isInitialJoinHydration = initialJoinHydrationRoomRef.current === code;
@@ -568,8 +579,13 @@ export function GameProvider({ children }) {
       }
     };
 
-    if (rosterPrimedRoomRef.current === roomCode) rosterPrimedRoomRef.current = "";
-    else fetchRoster();
+    if (rosterPrimedRoomRef.current === roomCode) {
+      rosterPrimedRoomRef.current = "";
+      // A successful join already supplied the self record. Schedule one
+      // shared roster reconciliation after the active-room lifecycle starts;
+      // heartbeat and entity events coalesce into this same read.
+      refreshPlayers();
+    } else fetchRoster();
 
     const unsubPlayers = base44.entities.RoomPlayer.subscribe((e) => {
       if (!active) return;
