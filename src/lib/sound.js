@@ -194,7 +194,7 @@ function playStep(track, s, t) {
   const b = track.bass[s];
   if (b) mTone(b, 0.22, track.bassType, 0.16, t - ctx.currentTime);
   const stab = track.stab[s];
-  if (stab) stab.forEach((f) => mTone(f, 0.16, track.stabType, 0.07, t - ctx.currentTime));
+  if (stab) (Array.isArray(stab) ? stab : [stab]).forEach((f) => mTone(f, 0.16, track.stabType, 0.07, t - ctx.currentTime));
 }
 
 function startScheduler() {
