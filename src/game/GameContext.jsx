@@ -14,7 +14,8 @@ const GameContext = createContext(null);
 
 const FRESH_MS = 30000;
 // Heartbeat interval — presence-only, safely inside the 30s active threshold.
-const HEARTBEAT_MS = 20000;
+const HEARTBEAT_MS = 25000;
+const HEARTBEAT_STAGGER_MS = 2000;
 // Debounce window for coalescing bursts of realtime events into one getRoster.
 const ROSTER_DEBOUNCE_MS = 400;
 // A Room update can be delivered by the entity subscription, the action
@@ -90,6 +91,7 @@ export function GameProvider({ children }) {
   const refreshPlayersRef = useRef(() => {});
   const activeRoomCodeRef = useRef(getActiveRoomCode() || "");
   const rosterPrimedRoomRef = useRef("");
+  const joinedRosterRoomRef = useRef("");
   const initialJoinHydrationRoomRef = useRef("");
   const initialJoinHydrationInFlightRoomRef = useRef("");
   const postJoinRosterHydratedRoomRef = useRef("");
@@ -142,6 +144,7 @@ export function GameProvider({ children }) {
     activeRoomCodeRef.current = "";
     seenSelfRef.current = false;
     rosterPrimedRoomRef.current = "";
+    joinedRosterRoomRef.current = "";
     initialJoinHydrationRoomRef.current = "";
     initialJoinHydrationInFlightRoomRef.current = "";
     postJoinRosterHydratedRoomRef.current = "";
@@ -222,22 +225,27 @@ export function GameProvider({ children }) {
       const hostNow = joinedRoom.host_session === sessionId;
       roomStatusRef.current = joinedRoom.status || "";
       const joinedPlayer = data.player ? mapPlayer(data.player, sessionId, joinedRoom.host_session) : null;
+      const joinedRoster = Array.isArray(data.players)
+        ? data.players.map((player) => mapPlayer(player, sessionId, joinedRoom.host_session))
+        : (joinedPlayer ? [joinedPlayer] : []);
+      const self = joinedRoster.find((player) => player.isYou) || joinedPlayer;
       setRoom(joinedRoom); setMode(joinedRoom.mode); setLength(joinedRoom.length);
       setYou({
         id: sessionId,
-        nickname: joinedPlayer?.nickname || nickname,
-        photo: joinedPlayer?.photo || photo || null,
-        avatar: joinedPlayer?.avatar || avatar || PRESET_AVATARS[0],
+        nickname: self?.nickname || nickname,
+        photo: self?.photo || photo || null,
+        avatar: self?.avatar || avatar || PRESET_AVATARS[0],
         isHost: hostNow,
       });
-      // Keep the server-returned self record until getRoster replaces this
-      // with the complete authoritative roster.
-      setPlayers(joinedPlayer ? [joinedPlayer] : []); setIsHost(hostNow);
+      // New room responses include a sanitized server-authoritative roster.
+      // Keep the one-player fallback for a client deployed before that change.
+      setPlayers(joinedRoster); setIsHost(hostNow);
       seenSelfRef.current = true;
-      // The active-room effect skips a same-tick roster read. The immediate
-      // heartbeat below reconciles membership if this browser is missing a
-      // player, avoiding two reads for every join.
+      // The active-room effect skips the same-tick roster read when join has
+      // already supplied the roster. Older backend responses retain the
+      // debounced reconciliation fallback.
       rosterPrimedRoomRef.current = joiningCode;
+      joinedRosterRoomRef.current = Array.isArray(data.players) ? joiningCode : "";
       initialJoinHydrationRoomRef.current = "";
       initialJoinHydrationInFlightRoomRef.current = "";
       postJoinRosterHydratedRoomRef.current = "";
@@ -355,6 +363,7 @@ export function GameProvider({ children }) {
       const roster = data.players || [];
       const hostSession = data.room?.host_session;
       if (data.room) {
+        roomStatusRef.current = data.room.status || roomStatusRef.current;
         setRoom(data.room);
         setIsHost(hostSession === sessionId);
       }
@@ -568,6 +577,9 @@ export function GameProvider({ children }) {
     };
 
     const requestRosterReconciliation = () => {
+      // A playing room has fixed membership. Replayed lobby membership events
+      // must never turn each phase change into four more roster reads.
+      if (roomStatusRef.current === "playing") return;
       if (initialJoinHydrationRoomRef.current === roomCode) {
         deferredJoinRosterReconciliationRoomRef.current = roomCode;
       } else {
@@ -599,9 +611,9 @@ export function GameProvider({ children }) {
 
     if (rosterPrimedRoomRef.current === roomCode) {
       rosterPrimedRoomRef.current = "";
-      // The successful join supplied the self record. Coalesce the follow-up
-      // roster reconciliation with the subscription's create events.
-      refreshPlayers();
+      // A current backend returns the full roster from join. Only use the
+      // legacy reconciliation fallback if that snapshot was unavailable.
+      if (joinedRosterRoomRef.current !== roomCode) refreshPlayers();
     } else fetchRoster();
 
     const unsubPlayers = base44.entities.RoomPlayer.subscribe((e) => {
@@ -648,9 +660,9 @@ export function GameProvider({ children }) {
     };
     // Joining already records a fresh, connected player. Defer and stagger
     // the first presence write so a full lobby does not send four expensive
-    // heartbeat transactions alongside its initial sync. The 4s maximum
+    // heartbeat transactions alongside its initial sync. The 2s maximum
     // offset remains inside the 30s active-player window.
-    const heartbeatOffset = [...sessionId].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4000;
+    const heartbeatOffset = [...sessionId].reduce((sum, char) => sum + char.charCodeAt(0), 0) % HEARTBEAT_STAGGER_MS;
     let beatTimer = null;
     const firstBeatTimer = setTimeout(() => {
       void beat();

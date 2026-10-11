@@ -29,6 +29,10 @@ export default async function (req) {
       return list[0] || null;
     };
     const playersOf = async (code) => await Player.filter({ room_code: code });
+    const displayRoster = (players) => players.map((p) => ({
+      session_id: p.session_id, nickname: p.nickname, avatar_id: p.avatar_id,
+      photo_url: p.photo_url, is_host: p.is_host, connected: p.connected, last_seen: p.last_seen,
+    }));
     // Host migration is decided once on the server. Use a session-id tie
     // breaker so a rare identical created_date cannot make query order matter.
     const nextActiveHost = (players, windowMs) => activePlayers(players, now, windowMs)
@@ -73,11 +77,7 @@ export default async function (req) {
         if (!players.find((p) => p.session_id === sessionId)) {
           return Response.json({ error: 'not_in_room' }, { status: 403 });
         }
-        const roster = players.map((p) => ({
-          session_id: p.session_id, nickname: p.nickname, avatar_id: p.avatar_id,
-          photo_url: p.photo_url, is_host: p.is_host, connected: p.connected, last_seen: p.last_seen,
-        }));
-        return Response.json({ room, players: roster });
+        return Response.json({ room, players: displayRoster(players) });
       }
 
       case 'join': {
@@ -95,7 +95,7 @@ export default async function (req) {
             nickname, avatar_id: avatarId, photo_url: photo, connected: true, last_seen: nowIso,
             is_host: room.host_session === sessionId,
           });
-          return Response.json({ room, player });
+          return Response.json({ room, player, players: displayRoster(players.map((p) => p.id === player.id ? player : p)) });
         }
         if (activePlayers(players, now).length >= (room.max_players || MAX_PLAYERS)) {
           return Response.json({ error: 'full' }, { status: 409 });
@@ -104,7 +104,10 @@ export default async function (req) {
           room_code: room.code, session_id: sessionId, nickname, avatar_id: avatarId, photo_url: photo,
           is_host: room.host_session === sessionId, connected: true, last_seen: nowIso,
         });
-        return Response.json({ room, player });
+        // The joining browser needs an authoritative lobby snapshot
+        // immediately. Returning it with join avoids an additional getRoster
+        // request from every browser during a multi-player join burst.
+        return Response.json({ room, player, players: displayRoster([...players, player]) });
       }
 
       case 'heartbeat': {
