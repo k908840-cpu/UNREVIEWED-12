@@ -17,6 +17,10 @@ const FRESH_MS = 30000;
 const HEARTBEAT_MS = 20000;
 // Debounce window for coalescing bursts of realtime events into one getRoster.
 const ROSTER_DEBOUNCE_MS = 400;
+// A Room update can be delivered by the entity subscription, the action
+// response, and React's initial subscription snapshot. One authoritative
+// roster read per browser is enough for that burst.
+const ROSTER_MIN_REQUEST_INTERVAL_MS = 1500;
 // Exponential backoff for rate-limit errors (ms).
 const BACKOFF_BASE_MS = 2000;
 const BACKOFF_MAX_MS = 30000;
@@ -56,6 +60,13 @@ function mapPlayer(rp, sessionId, hostSession) {
   };
 }
 
+function hasCompleteGameRoster(gameState, roster) {
+  const expected = new Set((gameState?.subject_order || []).filter((id) => typeof id === "string"));
+  if (!expected.size) return true;
+  const present = new Set((roster || []).map((player) => player.sessionId));
+  return [...expected].every((sessionId) => present.has(sessionId));
+}
+
 export function GameProvider({ children }) {
   const navigate = useNavigate();
   const sessionId = useRef(getSessionId()).current;
@@ -80,6 +91,7 @@ export function GameProvider({ children }) {
   const playersRef = useRef([]);
   const rosterDebounceRef = useRef(null);
   const inFlightRosterRef = useRef(false);
+  const lastRosterRequestRef = useRef({ code: "", at: 0 });
   const backoffRef = useRef(0);
   const backoffTimerRef = useRef(null);
   const fetchRosterRef = useRef(async () => {});
@@ -144,6 +156,7 @@ export function GameProvider({ children }) {
     if (rosterDebounceRef.current) { clearTimeout(rosterDebounceRef.current); rosterDebounceRef.current = null; }
     if (backoffTimerRef.current) { clearTimeout(backoffTimerRef.current); backoffTimerRef.current = null; }
     backoffRef.current = 0; inFlightRosterRef.current = false;
+    lastRosterRequestRef.current = { code: "", at: 0 };
     setRoomCode(""); setPendingRoomCodeState(""); setRoom(null); setIsHost(false); setPlayers([]);
     setYou({ nickname: "", photo: null, avatar: PRESET_AVATARS[0] });
     setLeftReason(null); setPhase("landing");
@@ -287,6 +300,10 @@ export function GameProvider({ children }) {
       }
       return;
     }
+    const now = Date.now();
+    const previous = lastRosterRequestRef.current;
+    if (previous.code === code && now - previous.at < ROSTER_MIN_REQUEST_INTERVAL_MS) return;
+    lastRosterRequestRef.current = { code, at: now };
     inFlightRosterRef.current = true;
     const isInitialJoinHydration = initialJoinHydrationRoomRef.current === code;
     if (isInitialJoinHydration) initialJoinHydrationInFlightRoomRef.current = code;
@@ -418,14 +435,13 @@ export function GameProvider({ children }) {
       const data = res?.data || {};
       if (data.error) return { error: data.error, active: data.active };
       if (data.room) setRoom(data.room);
-      refreshPlayers({ force: true });
       return { ok: true };
     } catch (e) {
       const error = e?.response?.data?.error || "start_failed";
       if (error === "forbidden") await refreshPlayers({ force: true });
       return { error, active: e?.response?.data?.active };
     }
-  }, [roomCode, sessionId, refreshPlayers]);
+  }, [roomCode, sessionId]);
 
   const roomHasMyAnswer = useCallback((candidate) => (
     Array.isArray(candidate?.game_state?.answers)
@@ -591,8 +607,12 @@ export function GameProvider({ children }) {
       if (e.type === "delete" || d.status === "closed") { setLeftReason("closed"); return; }
       setRoom(d);
       syncHostSession(d.host_session);
-      // When the game starts, ensure every client has the complete roster
-      if (d.status === "playing") fetchRoster();
+      // Room updates already contain the gameplay state. Reconcile the
+      // roster only if that state names a player this client does not know;
+      // otherwise a single start fans out into needless reads from everyone.
+      if (d.status === "playing" && !hasCompleteGameRoster(d.game_state, playersRef.current)) {
+        refreshPlayers();
+      }
     });
 
     const beat = async () => {
@@ -619,7 +639,11 @@ export function GameProvider({ children }) {
     if (!room) return;
     const status = room.status;
     const roundIdx = room.game_state?.round_index ?? 0;
-    if (status === "playing" && (prevStatusRef.current !== "playing" || roundIdx !== prevRoundRef.current)) {
+    if (
+      status === "playing"
+      && (prevStatusRef.current !== "playing" || roundIdx !== prevRoundRef.current)
+      && !hasCompleteGameRoster(room.game_state, playersRef.current)
+    ) {
       refreshPlayers();
     }
     prevStatusRef.current = status;
