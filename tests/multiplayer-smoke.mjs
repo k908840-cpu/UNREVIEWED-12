@@ -35,6 +35,15 @@ function roomAction(request) {
   }
 }
 
+function roomClientReason(request) {
+  try {
+    const reason = JSON.parse(request.postData() || '{}').client_reason;
+    return typeof reason === 'string' && /^[a-z-]{1,40}$/.test(reason) ? reason : null;
+  } catch {
+    return null;
+  }
+}
+
 function roomResponseSummary(body) {
   try {
     const data = JSON.parse(body || '{}');
@@ -92,6 +101,7 @@ function observe(page, player) {
       player,
       type: 'request',
       action: roomAction(request),
+      clientReason: roomClientReason(request),
       method: request.method(),
       at: new Date().toISOString(),
     };
@@ -108,6 +118,7 @@ function observe(page, player) {
       player,
       type: 'response',
       action,
+      clientReason: roomClientReason(response.request()),
       method: response.request().method(),
       status: response.status(),
       phase: summary.phase,

@@ -211,8 +211,10 @@ export function GameProvider({ children }) {
     }
   }, [sessionId]);
 
-  const requestRoster = useCallback(async (code) => {
-    const res = await base44.functions.invoke("room", { action: "getRoster", code, sessionId });
+  const requestRoster = useCallback(async (code, clientReason = "unknown") => {
+    const res = await base44.functions.invoke("room", {
+      action: "getRoster", code, sessionId, client_reason: clientReason,
+    });
     return res?.data || {};
   }, [sessionId]);
 
@@ -298,7 +300,7 @@ export function GameProvider({ children }) {
 
   // Immediate roster fetch with in-flight dedup + exponential backoff on
   // rate-limit errors. Only genuine not_found / closed clear room state.
-  const fetchRoster = useCallback(async (requestedRoomCode = roomCode) => {
+  const fetchRoster = useCallback(async (requestedRoomCode = roomCode, clientReason = "unknown") => {
     const code = normalizeRoomCode(requestedRoomCode);
     if (!code) return;
     // Roster membership cannot grow after Start. Ignore delayed create-event
@@ -326,7 +328,7 @@ export function GameProvider({ children }) {
         const delay = ROSTER_MIN_REQUEST_INTERVAL_MS - (now - previous.at);
         rosterDebounceRef.current = setTimeout(() => {
           rosterDebounceRef.current = null;
-          fetchRosterRef.current(code);
+          fetchRosterRef.current(code, clientReason);
         }, delay);
       }
       return;
@@ -344,11 +346,11 @@ export function GameProvider({ children }) {
       if (backoffTimerRef.current) clearTimeout(backoffTimerRef.current);
       backoffTimerRef.current = setTimeout(() => {
         backoffTimerRef.current = null;
-        fetchRosterRef.current();
+        fetchRosterRef.current(undefined, "rate-limit-retry");
       }, next);
     };
     try {
-      const data = await requestRoster(code);
+      const data = await requestRoster(code, clientReason);
       // A prior room may finish after leave/rejoin. It must not overwrite the
       // current room's authoritative state.
       if (activeRoomCodeRef.current !== code) return;
@@ -427,12 +429,12 @@ export function GameProvider({ children }) {
     if (backoffTimerRef.current) return; // rate-limited; backoff will retry
     if (opts.force) {
       if (rosterDebounceRef.current) { clearTimeout(rosterDebounceRef.current); rosterDebounceRef.current = null; }
-      return fetchRoster();
+      return fetchRoster(undefined, opts.reason || "forced-refresh");
     }
     if (rosterDebounceRef.current) clearTimeout(rosterDebounceRef.current);
     rosterDebounceRef.current = setTimeout(() => {
       rosterDebounceRef.current = null;
-      fetchRoster();
+      fetchRoster(undefined, opts.reason || "refresh");
     }, ROSTER_DEBOUNCE_MS);
   }, [roomCode, fetchRoster]);
   refreshPlayersRef.current = refreshPlayers;
@@ -494,7 +496,7 @@ export function GameProvider({ children }) {
   const reconcileAnswerSubmission = useCallback(async () => {
     if (!roomCode) return { error: "no_room", ambiguous: false };
     try {
-      const data = await requestRoster(roomCode);
+      const data = await requestRoster(roomCode, "answer-reconciliation");
       if (data?.room) setRoom(data.room);
       if (data?.error || !data?.room) {
         return {
@@ -632,8 +634,8 @@ export function GameProvider({ children }) {
       rosterPrimedRoomRef.current = "";
       // A current backend returns the full roster from join. Only use the
       // legacy reconciliation fallback if that snapshot was unavailable.
-      if (joinedRosterRoomRef.current !== roomCode) refreshPlayers();
-    } else fetchRoster();
+      if (joinedRosterRoomRef.current !== roomCode) refreshPlayers({ reason: "legacy-join" });
+    } else fetchRoster(undefined, "activation");
 
     const unsubRoom = base44.entities.Room.subscribe((e) => {
       if (!active) return;
@@ -670,7 +672,7 @@ export function GameProvider({ children }) {
     let lobbySyncTimer = null;
     const syncLobbyRoster = () => {
       if (!active || roomStatusRef.current !== "lobby") return;
-      fetchRosterRef.current(roomCode);
+      fetchRosterRef.current(roomCode, "lobby-sync");
       const delay = Date.now() < lobbyFastUntil ? LOBBY_ROSTER_FAST_SYNC_MS : ROSTER_MIN_REQUEST_INTERVAL_MS;
       lobbySyncTimer = setTimeout(syncLobbyRoster, delay);
     };
