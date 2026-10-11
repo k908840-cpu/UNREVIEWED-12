@@ -301,18 +301,31 @@ async function waitForAnswerAcceptance(page, index, eventSequenceBeforeClick) {
 
 async function submitAnswers(pages) {
   const writers = await waitForWritingRoles(pages);
-  await Promise.all(writers.map(async ({ index, editor }) => {
+  for (const { index, editor } of writers) {
     await editor.fill(`Round one smoke review from ${PLAYERS[index]}.`);
     const eventSequenceBeforeClick = roomEventSequence;
     await clickEnabled(pages[index].getByRole('button', { name: /^Submit$/ }), `${PLAYERS[index]}'s Submit button`);
     await waitForAnswerAcceptance(pages[index], index, eventSequenceBeforeClick);
-  }));
+  }
 }
 
-async function hostSkipIfAvailable(page) {
-  // Writing.jsx shows "Host: skip to rating"; Rating.jsx shows "Skip".
-  const skip = page.getByRole('button', { name: /^(?:Host: skip to rating|Skip)$/i });
-  if (await visible(skip) && await skip.isEnabled()) await skip.click();
+async function waitForRatingAcceptance(page, index, eventSequenceBeforeClick) {
+  const deadline = Date.now() + TIMEOUT;
+  while (Date.now() < deadline) {
+    const ratingResponse = roomRequests.find((event) => (
+      event.sequence > eventSequenceBeforeClick
+      && event.player === PLAYERS[index]
+      && event.type === 'response'
+      && event.action === 'submit_rating'
+    ));
+    if (ratingResponse?.outcome === 'success') return;
+    if (ratingResponse?.outcome === 'failure') {
+      throw new Error(`${PLAYERS[index]}'s submit_rating failed: status=${ratingResponse.status}, error=${ratingResponse.error || 'unknown'}, phase=${ratingResponse.phase || 'unavailable'}`);
+    }
+    if (await visible(page.getByText('Locked in. Waiting on the others…', { exact: true }))) return;
+    await wait(100);
+  }
+  throw new Error(`Timed out after ${TIMEOUT}ms waiting for ${PLAYERS[index]}'s rating acceptance.`);
 }
 
 async function rateRound(pages) {
@@ -337,13 +350,13 @@ async function rateRound(pages) {
       if (await visible(stars)) raters.push({ index, stars });
     }
     assert.equal(raters.length, 2, `answer ${answer} should have two eligible raters`);
-    await Promise.all(raters.map(async ({ index, stars }) => {
+    for (const { index, stars } of raters) {
+      const eventSequenceBeforeClick = roomEventSequence;
       await clickEnabled(stars.getByRole('button', { name: '5 stars' }), `${PLAYERS[index]}'s five-star rating`);
-      await waitUntil(() => visible(pages[index].getByText('Locked in. Waiting on the others…', { exact: true })), `${PLAYERS[index]}'s rating confirmation`);
-    }));
+      await waitForRatingAcceptance(pages[index], index, eventSequenceBeforeClick);
+    }
 
     if (answer < total) {
-      await hostSkipIfAvailable(pages[0]);
       await waitUntil(() => route(pages[0]) === '/rate' && visible(pages[0].getByText(new RegExp(`^Answer ${answer + 1} of ${total}$`))), `rating card ${answer + 1}`);
     }
   }
@@ -430,7 +443,6 @@ try {
     await clickEnabled(pages[0].getByRole('button', { name: /^Continue/ }), 'subject reveal Continue button');
     await waitForRoute(pages, '/write', 'writing phase');
     await submitAnswers(pages);
-    await hostSkipIfAvailable(pages[0]);
     await waitForRoute(pages, '/rate', 'rating phase');
     await finishRoundAndEnterRoundTwo(pages);
   });
