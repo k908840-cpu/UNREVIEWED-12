@@ -60,13 +60,6 @@ function mapPlayer(rp, sessionId, hostSession) {
   };
 }
 
-function hasCompleteGameRoster(gameState, roster) {
-  const expected = new Set((gameState?.subject_order || []).filter((id) => typeof id === "string"));
-  if (!expected.size) return true;
-  const present = new Set((roster || []).map((player) => player.sessionId));
-  return [...expected].every((sessionId) => present.has(sessionId));
-}
-
 export function GameProvider({ children }) {
   const navigate = useNavigate();
   const sessionId = useRef(getSessionId()).current;
@@ -86,8 +79,6 @@ export function GameProvider({ children }) {
   const [chat, setChat] = useState([]);
 
   const seenSelfRef = useRef(false);
-  const prevStatusRef = useRef(null);
-  const prevRoundRef = useRef(-1);
   const playersRef = useRef([]);
   const rosterDebounceRef = useRef(null);
   const inFlightRosterRef = useRef(false);
@@ -237,10 +228,11 @@ export function GameProvider({ children }) {
       // with the complete authoritative roster.
       setPlayers(joinedPlayer ? [joinedPlayer] : []); setIsHost(hostNow);
       seenSelfRef.current = true;
-      // The active-room effect will see this flag and skip its same-tick
-      // fetch; the call below uses the shared dedup/backoff path instead.
+      // The active-room effect skips a same-tick roster read. The immediate
+      // heartbeat below reconciles membership if this browser is missing a
+      // player, avoiding two reads for every join.
       rosterPrimedRoomRef.current = joiningCode;
-      initialJoinHydrationRoomRef.current = joiningCode;
+      initialJoinHydrationRoomRef.current = "";
       initialJoinHydrationInFlightRoomRef.current = "";
       postJoinRosterHydratedRoomRef.current = "";
       deferredJoinRosterReconciliationRoomRef.current = "";
@@ -248,14 +240,11 @@ export function GameProvider({ children }) {
       setRoomCode(joiningCode); setActiveRoomCode(joiningCode);
       clearPendingRoomCode(); setPendingRoomCodeState("");
       setPhase("lobby");
-      // Do not await hydration: getRoster is authoritative for the complete
-      // roster, but transient failures must not undo a successful join.
-      void fetchRosterRef.current(joiningCode);
       return { ok: true };
     } catch (e) {
       throw new Error(e?.response?.data?.error || e?.message || "join_failed");
     }
-  }, [sessionId, pendingRoomCode, requestRoster]);
+  }, [sessionId, pendingRoomCode]);
 
   const persistConfig = useCallback(async (m, l) => {
     const code = roomCode || pendingRoomCode;
@@ -601,12 +590,6 @@ export function GameProvider({ children }) {
       if (e.type === "delete" || d.status === "closed") { setLeftReason("closed"); return; }
       setRoom(d);
       syncHostSession(d.host_session);
-      // Room updates already contain the gameplay state. Reconcile the
-      // roster only if that state names a player this client does not know;
-      // otherwise a single start fans out into needless reads from everyone.
-      if (d.status === "playing" && !hasCompleteGameRoster(d.game_state, playersRef.current)) {
-        refreshPlayers();
-      }
     });
 
     const beat = async () => {
@@ -627,22 +610,6 @@ export function GameProvider({ children }) {
       if (backoffTimerRef.current) { clearTimeout(backoffTimerRef.current); backoffTimerRef.current = null; }
     };
   }, [roomCode, sessionId, fetchRoster, refreshPlayers]);
-
-  // ---- safety: ensure complete roster on game start / new round ----
-  useEffect(() => {
-    if (!room) return;
-    const status = room.status;
-    const roundIdx = room.game_state?.round_index ?? 0;
-    if (
-      status === "playing"
-      && (prevStatusRef.current !== "playing" || roundIdx !== prevRoundRef.current)
-      && !hasCompleteGameRoster(room.game_state, playersRef.current)
-    ) {
-      refreshPlayers();
-    }
-    prevStatusRef.current = status;
-    prevRoundRef.current = roundIdx;
-  }, [room?.status, room?.game_state?.round_index, refreshPlayers]);
 
   // ---- centralized game-phase navigation ----
   useEffect(() => {
