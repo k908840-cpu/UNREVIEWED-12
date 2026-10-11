@@ -7,7 +7,7 @@ import {
   getSessionId, getActiveRoomCode, setActiveRoomCode, clearActiveRoom,
   getPendingRoomCode, setPendingRoomCode, clearPendingRoomCode,
 } from "@/lib/session";
-import { advanceFallbackDelay, createAdvanceCoordinator, phaseDeadlineKey } from "./advanceCoordinator";
+import { advanceFallbackDelay, createAdvanceCoordinator, createAdvanceRequestGate, phaseDeadlineKey } from "./advanceCoordinator";
 import { createAnswerSubmissionCoordinator } from "./answerSubmissionCoordinator";
 
 const GameContext = createContext(null);
@@ -105,12 +105,16 @@ export function GameProvider({ children }) {
   const deferredJoinRosterReconciliationRoomRef = useRef("");
   const callRoomRef = useRef(null);
   const advanceRequestRef = useRef(null);
-  const advanceInFlightRef = useRef(false);
+  const advanceRequestGateRef = useRef(null);
   const answerRequestRef = useRef(null);
   const answerReconcileRef = useRef(null);
+  const predictionRequestRef = useRef(null);
+  const predictionReconcileRef = useRef(null);
   const advanceCoordinatorRef = useRef(null);
   const answerSubmissionCoordinatorRef = useRef(null);
+  const predictionSubmissionCoordinatorRef = useRef(null);
   const answerRoundKeyRef = useRef("");
+  const predictionRoundKeyRef = useRef("");
   const resumeAttemptedRef = useRef(false);
 
   if (!advanceCoordinatorRef.current) {
@@ -118,10 +122,21 @@ export function GameProvider({ children }) {
       send: () => advanceRequestRef.current?.() || { error: "advance_unavailable" },
     });
   }
+  if (!advanceRequestGateRef.current) {
+    advanceRequestGateRef.current = createAdvanceRequestGate({
+      send: (payload) => callRoomRef.current?.("advance", payload) || { error: "advance_unavailable" },
+    });
+  }
   if (!answerSubmissionCoordinatorRef.current) {
     answerSubmissionCoordinatorRef.current = createAnswerSubmissionCoordinator({
       submit: (text) => answerRequestRef.current?.(text) || { error: "submission_unavailable", ambiguous: true },
       reconcile: () => answerReconcileRef.current?.() || { error: "reconciliation_unavailable", ambiguous: true },
+    });
+  }
+  if (!predictionSubmissionCoordinatorRef.current) {
+    predictionSubmissionCoordinatorRef.current = createAnswerSubmissionCoordinator({
+      submit: (answerId) => predictionRequestRef.current?.(answerId) || { error: "submission_unavailable", ambiguous: true },
+      reconcile: () => predictionReconcileRef.current?.() || { error: "reconciliation_unavailable", ambiguous: true },
     });
   }
 
@@ -161,8 +176,11 @@ export function GameProvider({ children }) {
     postJoinRosterHydratedRoomRef.current = "";
     deferredJoinRosterReconciliationRoomRef.current = "";
     answerRoundKeyRef.current = "";
+    predictionRoundKeyRef.current = "";
     advanceCoordinatorRef.current?.reset();
+    advanceRequestGateRef.current?.reset();
     answerSubmissionCoordinatorRef.current?.reset();
+    predictionSubmissionCoordinatorRef.current?.reset();
     if (rosterDebounceRef.current) { clearTimeout(rosterDebounceRef.current); rosterDebounceRef.current = null; }
     if (backoffTimerRef.current) { clearTimeout(backoffTimerRef.current); backoffTimerRef.current = null; }
     backoffRef.current = 0; inFlightRosterRef.current = false;
@@ -455,7 +473,7 @@ export function GameProvider({ children }) {
         return {
           ...data,
           retryable: isRateLimited(data),
-          ambiguous: false,
+          ambiguous: isRateLimited(data),
         };
       }
       return data;
@@ -514,6 +532,31 @@ export function GameProvider({ children }) {
     }
   }, [roomCode, requestRoster, roomHasMyAnswer]);
 
+  const roomHasPrediction = useCallback((candidate, answerId) => (
+    typeof answerId === "string"
+    && candidate?.game_state?.prediction === answerId
+  ), []);
+
+  const reconcilePredictionSubmission = useCallback(async (answerId) => {
+    if (!roomCode) return { error: "no_room", ambiguous: false };
+    try {
+      const data = await requestRoster(roomCode, "prediction-reconciliation");
+      if (data?.room) setRoom(data.room);
+      if (data?.error || !data?.room) {
+        return {
+          error: data?.error || "reconciliation_failed",
+          ambiguous: !data?.error || isRateLimited(data),
+        };
+      }
+      return { accepted: roomHasPrediction(data.room, answerId), room: data.room };
+    } catch (e) {
+      return {
+        error: e?.response?.data?.error || e?.message || "reconciliation_failed",
+        ambiguous: true,
+      };
+    }
+  }, [roomCode, requestRoster, roomHasPrediction]);
+
   const sendAnswer = useCallback(async (text) => {
     const result = await callRoom("submit_answer", { text });
     if (roomHasMyAnswer(result?.room)) return { accepted: true, room: result.room };
@@ -524,27 +567,41 @@ export function GameProvider({ children }) {
   answerRequestRef.current = sendAnswer;
   answerReconcileRef.current = reconcileAnswerSubmission;
 
+  const sendPrediction = useCallback(async (answerId) => {
+    const result = await callRoom("submit_prediction", { answer_id: answerId });
+    if (roomHasPrediction(result?.room, answerId)) return { accepted: true, room: result.room };
+    return result?.error
+      ? result
+      : { error: "submission_unconfirmed", ambiguous: true, retryable: true };
+  }, [callRoom, roomHasPrediction]);
+  predictionRequestRef.current = sendPrediction;
+  predictionReconcileRef.current = (answerId) => reconcilePredictionSubmission(answerId);
+
   const submitAnswer = useCallback((text) => answerSubmissionCoordinatorRef.current.submit(text), []);
   const submitRating = useCallback((answerId, stars) => callRoom("submit_rating", { answer_id: answerId, stars }), [callRoom]);
-  const submitPrediction = useCallback((answerId) => callRoom("submit_prediction", { answer_id: answerId }), [callRoom]);
+  const submitPrediction = useCallback((answerId) => predictionSubmissionCoordinatorRef.current.submit(answerId), []);
   const advance = useCallback(async (opts = {}) => {
-    if (advanceInFlightRef.current) return { error: "advance_pending", retryable: false };
     const gameState = room?.game_state;
-    advanceInFlightRef.current = true;
-    try {
-      return await callRoom("advance", {
-        force: opts.force || false,
-        // A visual screen can briefly remain mounted after the room moves to
-        // its next phase. Callers may bind a force action to the phase their
-        // screen represents so that a stale click cannot skip live gameplay.
-        expected_phase: opts.expectedPhase || gameState?.phase,
-        expected_deadline: opts.expectedDeadline || gameState?.phase_deadline,
-        expected_round: opts.expectedRound ?? gameState?.round_index,
-      });
-    } finally {
-      advanceInFlightRef.current = false;
-    }
-  }, [callRoom, room?.game_state?.phase, room?.game_state?.phase_deadline]);
+    const expectedPhase = opts.expectedPhase || gameState?.phase;
+    const expectedDeadline = opts.expectedDeadline || gameState?.phase_deadline;
+    const expectedRound = opts.expectedRound ?? gameState?.round_index;
+    const payload = {
+      force: opts.force || false,
+      // A visual screen can briefly remain mounted after the room moves to
+      // its next phase. Callers may bind a force action to the phase their
+      // screen represents so that a stale click cannot skip live gameplay.
+      expected_phase: expectedPhase,
+      expected_deadline: expectedDeadline,
+      expected_round: expectedRound,
+    };
+    const key = `${roomCode}:${expectedPhase || ""}:${expectedDeadline || ""}:${expectedRound ?? ""}`;
+    return advanceRequestGateRef.current.request(key, payload, {
+      // Visual continuation actions should run after a response still in
+      // flight for their previous screen. Deadline callbacks remain bounded
+      // and never queue behind another local request.
+      queueAfterInFlight: opts.queueAfterInFlight === true,
+    });
+  }, [roomCode, room?.game_state?.phase, room?.game_state?.phase_deadline, room?.game_state?.round_index]);
   advanceRequestRef.current = advance;
 
   // A writer submits once per round. Reset the local submission guard only
@@ -559,6 +616,22 @@ export function GameProvider({ children }) {
     if (key && key !== answerRoundKeyRef.current) {
       answerRoundKeyRef.current = key;
       answerSubmissionCoordinatorRef.current?.reset();
+    }
+  }, [roomCode, room?.game_state?.phase, room?.game_state?.round_index, room?.game_state?.current_subject]);
+
+  // Prediction submission uses the same reconciliation guarantee as writing:
+  // reset only for a distinct authoritative subject/round, never while a
+  // transient response failure is being reconciled.
+  useEffect(() => {
+    const gameState = room?.game_state;
+    if (gameState?.phase !== "prediction") {
+      predictionRoundKeyRef.current = "";
+      return;
+    }
+    const key = `${roomCode}:${gameState.round_index ?? 0}:${gameState.current_subject ?? ""}`;
+    if (key && key !== predictionRoundKeyRef.current) {
+      predictionRoundKeyRef.current = key;
+      predictionSubmissionCoordinatorRef.current?.reset();
     }
   }, [roomCode, room?.game_state?.phase, room?.game_state?.round_index, room?.game_state?.current_subject]);
 

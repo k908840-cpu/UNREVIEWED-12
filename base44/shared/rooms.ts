@@ -34,3 +34,11 @@ export function isActive(player, now = Date.now(), windowMs = RECONNECT_WINDOW_M
 export function activePlayers(players, now = Date.now(), windowMs = RECONNECT_WINDOW_MS) {
   return (players || []).filter((p) => isActive(p, now, windowMs));
 }
+
+// Host ownership is server-authoritative, but selecting a replacement is kept
+// deterministic so simultaneous heartbeats converge on the same active player.
+export function selectActiveHost(players, now = Date.now(), windowMs = RECONNECT_WINDOW_MS) {
+  return activePlayers(players, now, windowMs)
+    .sort((a, b) => String(a.created_date || "").localeCompare(String(b.created_date || ""))
+      || String(a.session_id || "").localeCompare(String(b.session_id || "")))[0];
+}

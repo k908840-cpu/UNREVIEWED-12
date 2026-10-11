@@ -21,6 +21,8 @@ export default function Prediction() {
   const { currentSubjectId, players, answers, submitPrediction, phaseDeadline, phaseDuration } = useGame();
   const [selected, setSelected] = useState(null);
   const [locked, setLocked] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submissionError, setSubmissionError] = useState("");
   const subject = players.find((p) => p.id === currentSubjectId);
   const you = players.find((p) => p.isYou);
   const isSubject = you?.id === currentSubjectId;
@@ -28,10 +30,24 @@ export default function Prediction() {
   useEffect(() => { sfx.whoosh(); }, []);
 
   const confirm = async () => {
-    if (!selected || locked) return;
-    setLocked(true);
-    sfx.predictionLock();
-    await submitPrediction(selected);
+    if (!selected || locked || submitting) return;
+    setSubmitting(true);
+    setSubmissionError("");
+    const result = await submitPrediction(selected);
+    if (result?.accepted) {
+      // A rate-limited response may have lost the acknowledgement after the
+      // server persisted the choice. Reflect the reconciled choice, not a
+      // later local card selection, and only play success audio once.
+      if (result.acceptedPayload) setSelected(result.acceptedPayload);
+      setLocked(true);
+      sfx.predictionLock();
+    } else {
+      setLocked(false);
+      setSubmissionError(result?.retryable
+        ? "We couldn't confirm that choice. Try again — your selection is still here."
+        : "That choice wasn't accepted. Check the round and try again.");
+    }
+    setSubmitting(false);
   };
 
   if (!isSubject) {
@@ -81,8 +97,8 @@ export default function Prediction() {
             <motion.button
               key={a.id}
               initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.07 }}
-              disabled={locked}
-              onClick={() => { if (!locked) { setSelected(a.id); sfx.starSelect(); } }}
+              disabled={locked || submitting}
+              onClick={() => { if (!locked && !submitting) { setSelected(a.id); setSubmissionError(""); sfx.starSelect(); } }}
               className={cn(
                 "flex w-full items-center gap-3 rounded-2xl border-4 p-4 text-left shadow-[0_5px_0_0_hsl(var(--ink))] transition",
                 isSel ? "border-[hsl(var(--ink))] ring-4 ring-primary" : "border-[hsl(var(--ink))]",
@@ -106,9 +122,10 @@ export default function Prediction() {
           <motion.button
             initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
             onClick={confirm}
+            disabled={submitting}
             className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-full border-4 border-[hsl(var(--ink))] bg-[hsl(var(--ink))] py-4 font-display text-xl uppercase tracking-wide text-cream shadow-[0_5px_0_0_hsl(var(--ink))]"
           >
-            <Lock size={20} /> Lock it in
+            <Lock size={20} /> {submitting ? "Confirming…" : "Lock it in"}
           </motion.button>
         )}
         {locked && (
@@ -118,6 +135,9 @@ export default function Prediction() {
           </motion.div>
         )}
       </AnimatePresence>
+      {submissionError && (
+        <p role="alert" className="mt-3 text-center text-sm font-semibold text-[hsl(var(--mode-adult))]">{submissionError}</p>
+      )}
     </div>
   );
 }

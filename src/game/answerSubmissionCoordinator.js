@@ -1,25 +1,26 @@
-// Serializes one writer's submission and reconciles an ambiguous response
-// before permitting another mutation. A timeout or 5xx is never treated as
-// proof that the server rejected the answer.
+// Serializes one player's single-response mutation and reconciles an ambiguous
+// response before permitting another mutation. A timeout or 5xx is never
+// treated as proof that the server rejected the submitted value.
 
 export function createAnswerSubmissionCoordinator({ submit, reconcile }) {
   let inFlight = false;
   let needsReconciliation = false;
   let confirmed = false;
+  let lastPayload = null;
 
   const confirmOrReconcile = async () => {
-    const state = await reconcile();
+    const state = await reconcile(lastPayload);
     if (state?.accepted) {
       confirmed = true;
       needsReconciliation = false;
-      return { accepted: true, reconciled: true, room: state.room };
+      return { accepted: true, reconciled: true, acceptedPayload: lastPayload, room: state.room };
     }
     return state || { error: "reconcile_failed", ambiguous: true };
   };
 
   return {
-    async submit(text) {
-      if (confirmed) return { accepted: true, alreadyConfirmed: true };
+    async submit(payload) {
+      if (confirmed) return { accepted: true, alreadyConfirmed: true, acceptedPayload: lastPayload };
       if (inFlight) return { error: "submission_pending", retryable: false };
 
       inFlight = true;
@@ -37,11 +38,12 @@ export function createAnswerSubmissionCoordinator({ submit, reconcile }) {
           needsReconciliation = false;
         }
 
-        const result = await submit(text);
+        lastPayload = payload;
+        const result = await submit(payload);
         if (result?.accepted) {
           confirmed = true;
           needsReconciliation = false;
-          return result;
+          return { ...result, acceptedPayload: payload };
         }
 
         // All missing/failed acknowledgements are treated as ambiguous until
@@ -72,6 +74,7 @@ export function createAnswerSubmissionCoordinator({ submit, reconcile }) {
       inFlight = false;
       needsReconciliation = false;
       confirmed = false;
+      lastPayload = null;
     },
     getState: () => ({ inFlight, needsReconciliation, confirmed }),
   };

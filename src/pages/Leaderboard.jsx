@@ -1,4 +1,4 @@
-import React, { useMemo, useEffect } from "react";
+import React, { useMemo, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { ArrowRight, Crown } from "lucide-react";
@@ -19,6 +19,8 @@ const RANK_LABEL = [
 export default function Leaderboard() {
   const navigate = useNavigate();
   const { scores, players, roundIndex, totalRounds, advance, endGame, isHost } = useGame();
+  const [advancing, setAdvancing] = useState(false);
+  const [advanceError, setAdvanceError] = useState("");
 
   useEffect(() => { sfx.lobby(); }, []);
 
@@ -26,7 +28,25 @@ export default function Leaderboard() {
   const isLast = roundIndex + 1 >= totalRounds;
   const maxScore = Math.max(1, ...ranked.map((r) => r.score));
 
-  const next = () => { sfx.reveal(); advance({ force: true, expectedPhase: "leaderboard", expectedRound: roundIndex }); };
+  const next = async () => {
+    if (advancing) return;
+    setAdvancing(true);
+    setAdvanceError("");
+    sfx.reveal();
+    const result = await advance({
+      force: true,
+      expectedPhase: "leaderboard",
+      expectedRound: roundIndex,
+      // A Results transition can still be completing when this page becomes
+      // interactive. Queue this distinct guarded request instead of losing
+      // the player's click to a temporary global in-flight operation.
+      queueAfterInFlight: true,
+    });
+    if (result?.error) {
+      setAdvanceError("Couldn't start the next round. Please try again.");
+      setAdvancing(false);
+    }
+  };
   const onEnd = async () => { sfx.tap(); await endGame(); navigate("/"); };
 
   return (
@@ -85,11 +105,13 @@ export default function Leaderboard() {
         <p className="mb-4 font-heading text-sm font-bold uppercase tracking-[0.3em] opacity-60">Next Victim…</p>
         <motion.button
           onClick={next}
+          disabled={advancing}
           whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
           className="inline-flex items-center gap-2 rounded-full border-4 border-[hsl(var(--ink))] bg-primary px-9 py-4 font-display text-2xl uppercase tracking-wide text-primary-foreground shadow-[0_6px_0_0_hsl(var(--ink))]"
         >
-          {isLast ? "Final Results" : "Next Round"} <ArrowRight size={22} />
+          {advancing ? "Starting…" : isLast ? "Final Results" : "Next Round"} <ArrowRight size={22} />
         </motion.button>
+        {advanceError && <p role="alert" className="mt-3 text-sm font-semibold text-[hsl(var(--mode-adult))]">{advanceError}</p>}
         {isHost && <div className="mt-4 flex justify-center"><button onClick={onEnd} className="text-xs uppercase tracking-wider opacity-50 hover:opacity-100">Host: End game now</button></div>}
       </div>
     </div>

@@ -5,6 +5,47 @@
 export const ADVANCE_RETRY_DELAYS_MS = [6_000, 18_000];
 export const ADVANCE_FALLBACK_STEP_MS = 12_000;
 
+// Serializes this browser's advance mutations. Deadline callbacks should
+// return immediately when another mutation is in flight, but a deliberate
+// visual "continue" action can wait behind an unrelated advance instead of
+// being silently lost. The server still validates each expected phase/round.
+export function createAdvanceRequestGate({ send }) {
+  let current = null;
+  const queued = [];
+
+  const run = (job) => {
+    current = job;
+    void Promise.resolve()
+      .then(() => send(job.payload))
+      .then(job.resolve, (error) => job.resolve({ error: error?.message || "advance_failed" }))
+      .finally(() => {
+        if (current === job) current = null;
+        const next = queued.shift();
+        if (next) run(next);
+      });
+  };
+
+  const duplicate = (key) => current?.key === key || queued.some((job) => job.key === key);
+
+  return {
+    request(key, payload, { queueAfterInFlight = false } = {}) {
+      if (!key) return Promise.resolve({ error: "advance_unavailable", retryable: false });
+      if (duplicate(key)) return Promise.resolve({ error: "advance_pending", retryable: false });
+      if (current && !queueAfterInFlight) return Promise.resolve({ error: "advance_pending", retryable: false });
+
+      return new Promise((resolve) => {
+        const job = { key, payload, resolve };
+        if (current) queued.push(job);
+        else run(job);
+      });
+    },
+    reset() {
+      while (queued.length) queued.shift().resolve({ error: "advance_cancelled", retryable: false });
+    },
+    getState: () => ({ inFlightKey: current?.key || "", queuedKeys: queued.map((job) => job.key) }),
+  };
+}
+
 export function phaseDeadlineKey(roomCode, gameState) {
   if (!roomCode || !gameState?.phase || !gameState?.phase_deadline) return "";
   return `${roomCode}:${gameState.phase}:${gameState.phase_deadline}:${gameState.rating_index ?? 0}`;

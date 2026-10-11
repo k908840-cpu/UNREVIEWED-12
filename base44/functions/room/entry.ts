@@ -1,5 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.44';
-import { makeCode, normalizeCode, MAX_PLAYERS, MIN_PLAYERS, HOST_MIGRATION_GRACE_MS, isActive, activePlayers } from '../../shared/rooms.ts';
+import { makeCode, normalizeCode, MAX_PLAYERS, MIN_PLAYERS, HOST_MIGRATION_GRACE_MS, isActive, activePlayers, selectActiveHost } from '../../shared/rooms.ts';
 import { PHASE_DURATIONS, LENGTH_CYCLES, buildSubjectOrder, selectPrompt, tryAdvance, doAdvance, matchesAdvanceExpectation } from '../../shared/game.ts';
 
 const LENGTHS = ['quick', 'standard', 'party', 'endless'];
@@ -33,12 +33,6 @@ export default async function (req) {
       session_id: p.session_id, nickname: p.nickname, avatar_id: p.avatar_id,
       photo_url: p.photo_url, is_host: p.is_host, connected: p.connected, last_seen: p.last_seen,
     }));
-    // Host migration is decided once on the server. Use a session-id tie
-    // breaker so a rare identical created_date cannot make query order matter.
-    const nextActiveHost = (players, windowMs) => activePlayers(players, now, windowMs)
-      .sort((a, b) => String(a.created_date || '').localeCompare(String(b.created_date || ''))
-        || String(a.session_id || '').localeCompare(String(b.session_id || '')))[0];
-
     switch (action) {
       case 'create': {
         let code = makeCode();
@@ -117,10 +111,9 @@ export default async function (req) {
         const me = players.find((p) => p.session_id === sessionId);
         if (!me) return Response.json({ error: 'not_in_room' }, { status: 404 });
 
-        // Treat this request as proof that its caller is active before judging
-        // whether the host is stale. Re-read the room and membership after the
-        // write so migration uses current persisted state rather than the
-        // heartbeat's initial snapshot.
+        // Keep the post-write room and membership validation: a player can be
+        // removed or a room closed while this heartbeat is in flight. The
+        // final reread after a possible host update was redundant, however.
         await Player.update(me.id, { connected: true, last_seen: nowIso });
 
         const currentRoom = await findRoom(room.code);
@@ -130,34 +123,33 @@ export default async function (req) {
           return Response.json({ error: 'not_in_room' }, { status: 404 });
         }
 
+        const freshPlayers = currentPlayers.map((player) => player.id === me.id
+          ? { ...player, connected: true, last_seen: nowIso }
+          : player);
         let hostSession = currentRoom.host_session;
-        const currentHost = currentPlayers.find((p) => p.session_id === hostSession);
+        const currentHost = freshPlayers.find((p) => p.session_id === hostSession);
         if (!isActive(currentHost, now, HOST_MIGRATION_GRACE_MS)) {
-          const next = nextActiveHost(currentPlayers, HOST_MIGRATION_GRACE_MS);
+          const next = selectActiveHost(freshPlayers, now, HOST_MIGRATION_GRACE_MS);
           if (next && next.session_id !== hostSession) {
-            // This is a practical read-select-update flow, not a transaction.
-            // The persisted room is re-read below and is the only host value
-            // returned to clients.
+            // Concurrent stale-host heartbeats select the same deterministic
+            // replacement. Room.host_session remains the source of truth.
             await Room.update(currentRoom.id, { host_session: next.session_id });
+            hostSession = next.session_id;
           }
         }
 
-        const authoritativeRoom = await findRoom(room.code);
-        hostSession = authoritativeRoom?.host_session || hostSession;
-        const postHeartbeatPlayers = await playersOf(room.code);
-
-        if (hostSession !== room.host_session) {
-          const currentHost = postHeartbeatPlayers.find((p) => p.session_id === hostSession);
+        if (hostSession !== currentRoom.host_session) {
+          const currentHost = freshPlayers.find((p) => p.session_id === hostSession);
           if (currentHost && !currentHost.is_host) await Player.update(currentHost.id, { is_host: true });
-          const stale = postHeartbeatPlayers.find((p) => p.is_host && p.session_id !== hostSession);
+          const stale = freshPlayers.find((p) => p.is_host && p.session_id !== hostSession);
           if (stale) await Player.update(stale.id, { is_host: false });
         }
 
         return Response.json({
           ok: true,
           host_session: hostSession,
-          active_session_ids: activePlayers(postHeartbeatPlayers, now).map((p) => p.session_id),
-          roster_session_ids: postHeartbeatPlayers.map((p) => p.session_id),
+          active_session_ids: activePlayers(freshPlayers, now).map((p) => p.session_id),
+          roster_session_ids: freshPlayers.map((p) => p.session_id),
         });
       }
 
@@ -170,7 +162,7 @@ export default async function (req) {
           await Player.delete(me.id);
           const remaining = players.filter((p) => p.id !== me.id);
           if (room.host_session === sessionId) {
-            const next = nextActiveHost(remaining);
+            const next = selectActiveHost(remaining, now);
             if (next) {
               await Room.update(room.id, { host_session: next.session_id });
               await Player.update(next.id, { is_host: true });
@@ -286,9 +278,15 @@ export default async function (req) {
         const gs = room.game_state;
         if (!gs || gs.phase !== 'prediction') return Response.json({ error: 'wrong_phase' }, { status: 400 });
         if (sessionId !== gs.current_subject) return Response.json({ error: 'not_subject' }, { status: 403 });
-        if (gs.prediction) return Response.json({ error: 'already_predicted' }, { status: 409 });
         const answerId = String(body.answer_id || '');
         if (!(gs.answers || []).some((a) => a.id === answerId)) return Response.json({ error: 'invalid_answer' }, { status: 400 });
+        // A lost response can make the subject safely retry the same choice.
+        // It is accepted idempotently, but never runs scoring/advancement a
+        // second time. A different second choice remains forbidden.
+        if (gs.prediction) {
+          if (gs.prediction === answerId) return Response.json({ room, accepted: true, already_predicted: true });
+          return Response.json({ room, error: 'already_predicted' }, { status: 409 });
+        }
         await Room.updateMany({ id: room.id }, { $set: { 'game_state.prediction': answerId } });
         const updated = await findRoom(room.code);
         const players = await playersOf(room.code);

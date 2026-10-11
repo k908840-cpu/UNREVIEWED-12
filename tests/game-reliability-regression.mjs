@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   ADVANCE_FALLBACK_STEP_MS,
   advanceFallbackDelay,
   createAdvanceCoordinator,
+  createAdvanceRequestGate,
 } from '../src/game/advanceCoordinator.js';
 import { createAnswerSubmissionCoordinator } from '../src/game/answerSubmissionCoordinator.js';
 import { matchesAdvanceExpectation } from '../base44/shared/game.ts';
+import { activePlayers, selectActiveHost } from '../base44/shared/rooms.ts';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function createScheduler() {
   let now = 0;
@@ -151,6 +158,72 @@ async function disconnectedHostDoesNotStrandFallback() {
   assert.equal(calls, 1, 'a non-host fallback must advance when the host is unavailable');
 }
 
+function heartbeatKeepsPresenceAndMigratesOnlyAfterTheReconnectWindow() {
+  const now = Date.parse('2026-10-11T10:00:00.000Z');
+  const players = [
+    { id: 'host-row', session_id: 'alpha-host', created_date: '2026-10-01T00:00:00.000Z', last_seen: new Date(now - 60_001).toISOString(), connected: true },
+    { id: 'bravo-row', session_id: 'bravo', created_date: '2026-10-02T00:00:00.000Z', last_seen: new Date(now - 1_000).toISOString(), connected: true },
+    { id: 'charlie-row', session_id: 'charlie', created_date: '2026-10-03T00:00:00.000Z', last_seen: new Date(now - 30_000).toISOString(), connected: true },
+  ];
+  assert.deepEqual(activePlayers(players, now).map((player) => player.session_id), ['bravo', 'charlie']);
+  assert.equal(selectActiveHost(players, now, 60_000)?.session_id, 'bravo', 'a stale host must migrate to the deterministic earliest active player');
+  assert.equal(selectActiveHost([{ ...players[0], last_seen: new Date(now - 59_999).toISOString() }], now, 60_000)?.session_id, 'alpha-host', 'a host inside the 60-second window must remain active');
+}
+
+async function normalHeartbeatAvoidsRedundantEntityReads() {
+  const entry = await readFile(path.join(ROOT, 'base44/functions/room/entry.ts'), 'utf8');
+  const heartbeat = entry.slice(entry.indexOf("case 'heartbeat':"), entry.indexOf("case 'leave':"));
+  assert.equal((heartbeat.match(/findRoom\(/g) || []).length, 2, 'a heartbeat must retain one post-write Room validation but no final redundant reread');
+  assert.equal((heartbeat.match(/playersOf\(/g) || []).length, 2, 'a heartbeat must retain post-write membership validation but no final redundant reread');
+  assert.match(heartbeat, /const freshPlayers = currentPlayers\.map/, 'the caller must be included as fresh before host migration');
+  assert.match(heartbeat, /selectActiveHost\(freshPlayers, now, HOST_MIGRATION_GRACE_MS\)/, 'host migration must keep using the 60-second grace window');
+}
+
+async function manualNextRoundQueuesBehindAnUnrelatedAdvance() {
+  let releasePrevious;
+  const calls = [];
+  const gate = createAdvanceRequestGate({
+    send: (payload) => {
+      calls.push(payload.expected_phase);
+      if (payload.expected_phase === 'results') return new Promise((resolve) => { releasePrevious = resolve; });
+      return Promise.resolve({ advanced: true });
+    },
+  });
+
+  const results = gate.request('room:results::0', { expected_phase: 'results', expected_round: 0 });
+  const leaderboard = gate.request(
+    'room:leaderboard::0',
+    { expected_phase: 'leaderboard', expected_round: 0 },
+    { queueAfterInFlight: true },
+  );
+  assert.deepEqual(calls, [], 'the gate starts its sender in a microtask');
+  await Promise.resolve();
+  assert.deepEqual(calls, ['results'], 'the unrelated Results advance should remain the only in-flight request');
+
+  releasePrevious({ advanced: true });
+  assert.deepEqual(await results, { advanced: true });
+  assert.deepEqual(await leaderboard, { advanced: true });
+  assert.deepEqual(calls, ['results', 'leaderboard'], 'Next Round must reach the backend once the unrelated advance settles');
+}
+
+async function duplicateManualNextRoundDoesNotQueueTwice() {
+  let release;
+  let calls = 0;
+  const gate = createAdvanceRequestGate({
+    send: () => {
+      calls += 1;
+      return new Promise((resolve) => { release = resolve; });
+    },
+  });
+  const first = gate.request('room:leaderboard::1', { expected_phase: 'leaderboard', expected_round: 1 });
+  await Promise.resolve();
+  const duplicate = await gate.request('room:leaderboard::1', { expected_phase: 'leaderboard', expected_round: 1 }, { queueAfterInFlight: true });
+  assert.equal(duplicate.error, 'advance_pending', 'repeated Next Round clicks must not produce duplicate mutations');
+  release({ advanced: true });
+  await first;
+  assert.equal(calls, 1);
+}
+
 async function rateLimitedAnswerIsReconciledBeforeRetrying() {
   let submitCalls = 0;
   let successfulAnswers = 0;
@@ -201,13 +274,62 @@ async function ambiguousAnswerResponseDoesNotDuplicate() {
   assert.equal(submitCalls, 1, 'confirmed ambiguous submissions must never be resent');
 }
 
+async function persistedPredictionIsAcceptedAfterAnHttp500() {
+  let submitCalls = 0;
+  let reconciliationCalls = 0;
+  const coordinator = createAnswerSubmissionCoordinator({
+    submit: async () => {
+      submitCalls += 1;
+      return { error: 'Rate limit exceeded', ambiguous: true, retryable: true };
+    },
+    // The write committed, but a later backend operation was rate limited.
+    reconcile: async (answerId) => {
+      reconciliationCalls += 1;
+      return { accepted: answerId === 'answer-a', room: { game_state: { prediction: 'answer-a' } } };
+    },
+  });
+
+  const result = await coordinator.submit('answer-a');
+  assert.equal(result.accepted, true);
+  assert.equal(result.reconciled, true);
+  assert.equal(result.acceptedPayload, 'answer-a');
+  assert.equal(submitCalls, 1);
+  assert.equal(reconciliationCalls, 1);
+
+  const repeated = await coordinator.submit('answer-a');
+  assert.equal(repeated.alreadyConfirmed, true);
+  assert.equal(submitCalls, 1, 'a reconciled prediction must never be submitted twice');
+}
+
+async function predictionEndpointTreatsMatchingRetryAsIdempotent() {
+  const entry = await readFile(path.join(ROOT, 'base44/functions/room/entry.ts'), 'utf8');
+  const prediction = entry.slice(entry.indexOf("case 'submit_prediction':"), entry.indexOf("case 'advance':"));
+  assert.match(prediction, /gs\.prediction === answerId\) return Response\.json\(\{ room, accepted: true, already_predicted: true \}\)/);
+  assert.match(prediction, /return Response\.json\(\{ room, error: 'already_predicted' \}, \{ status: 409 \}\)/);
+}
+
+async function smokeTestWaitsForRenderedLeaderboardAndRoundTwoContent() {
+  const smoke = await readFile(path.join(ROOT, 'tests/multiplayer-smoke.mjs'), 'utf8');
+  assert.match(smoke, /async function waitForLeaderboardReady/);
+  assert.ok(smoke.includes("page.getByRole('heading', { name: /^LEADERBOARD$/i })"));
+  assert.match(smoke, /async function waitForRoundTwoReveal/);
+  assert.match(smoke, /new Set\(subjectNames\)\.size === 1/);
+}
+
 await duplicateDeadlineCallbacksAreCoalesced();
 await simultaneousClientsUseOwnerAndFallbackOrder();
 activeHostIsPreferredBeforeFallbacks();
 await delayedAdvanceResponseStaysSingleFlightAndRetriesAreBounded();
 delayedAdvanceCannotSkipTheNextServerPhase();
 await disconnectedHostDoesNotStrandFallback();
+heartbeatKeepsPresenceAndMigratesOnlyAfterTheReconnectWindow();
+await normalHeartbeatAvoidsRedundantEntityReads();
+await manualNextRoundQueuesBehindAnUnrelatedAdvance();
+await duplicateManualNextRoundDoesNotQueueTwice();
 await rateLimitedAnswerIsReconciledBeforeRetrying();
 await ambiguousAnswerResponseDoesNotDuplicate();
+await persistedPredictionIsAcceptedAfterAnHttp500();
+await predictionEndpointTreatsMatchingRetryAsIdempotent();
+await smokeTestWaitsForRenderedLeaderboardAndRoundTwoContent();
 
 console.log('Game reliability regressions passed.');

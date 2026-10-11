@@ -86,6 +86,36 @@ async function waitForRoute(pages, expected, description) {
   await waitUntil(() => pages.every((page) => route(page) === expected), description);
 }
 
+async function waitForLeaderboardReady(pages) {
+  await waitUntil(async () => {
+    for (const page of pages) {
+      if (route(page) !== '/leaderboard') return false;
+      if (!await visible(page.getByRole('heading', { name: /^LEADERBOARD$/i }))) return false;
+      if (!await visible(page.getByText('Standings', { exact: true }))) return false;
+    }
+    return true;
+  }, 'the rendered Leaderboard on all four clients');
+}
+
+async function waitForRoundTwoReveal(pages) {
+  let subjectNames = [];
+  await waitUntil(async () => {
+    subjectNames = [];
+    for (const page of pages) {
+      if (route(page) !== '/reveal') return false;
+      if (!await visible(page.getByText("Tonight's Victim", { exact: true }))) return false;
+      if (!await visible(page.getByText('Please review responsibly.', { exact: true }))) return false;
+      const subject = page.locator('h1.gold-text'); // SubjectReveal.jsx
+      if (!await visible(subject)) return false;
+      const name = (await subject.textContent())?.trim();
+      if (!name) return false;
+      subjectNames.push(name);
+    }
+    return new Set(subjectNames).size === 1;
+  }, 'the rendered Round 2 reveal and one shared subject on all four clients');
+  return subjectNames[0];
+}
+
 function observe(page, player) {
   page.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push({ player, type: 'console.error', text: message.text(), location: message.location(), at: new Date().toISOString() });
@@ -397,10 +427,11 @@ async function finishRoundAndEnterRoundTwo(pages) {
   await screenshot(pages, 'round-results');
   await clickEnabled(pages[0].getByRole('button', { name: /^Leaderboard/ }), 'Leaderboard button');
   await waitForRoute(pages, '/leaderboard', 'first-round Leaderboard');
+  await waitForLeaderboardReady(pages);
   await screenshot(pages, 'round-one-leaderboard');
   await clickEnabled(pages[0].getByRole('button', { name: /^Next Round/ }), 'Next Round button');
   await waitForRoute(pages, '/reveal', 'Round 2 subject reveal');
-  await waitUntil(() => visible(pages[0].getByText("Tonight's Victim", { exact: true })), 'Round 2 reveal UI');
+  await waitForRoundTwoReveal(pages);
   await screenshot(pages, 'round-two-reveal');
 }
 
