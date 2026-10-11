@@ -588,16 +588,10 @@ export function GameProvider({ children }) {
       if (d.room_code && d.room_code !== roomCode) return;
       // create/delete = player joined/left → refresh
       if (e.type === "create" || e.type === "delete") { requestRosterReconciliation(); return; }
-      // update — only refresh if meaningful fields changed (not heartbeat last_seen)
-      if (e.type === "update") {
-        const existing = playersRef.current.find((p) => p.sessionId === d.session_id);
-        if (!existing) { requestRosterReconciliation(); return; }
-        const meaningful =
-          (d.nickname != null && d.nickname !== existing.nickname) ||
-          (d.avatar_id != null && d.avatar_id !== (existing.avatar?.id || "")) ||
-          (d.photo_url != null && d.photo_url !== existing.photo);
-        if (meaningful) requestRosterReconciliation();
-      }
+      // RoomPlayer updates are heartbeat/presence writes. Membership is
+      // authoritative through create/delete events; connected state is
+      // reconciled from each caller's heartbeat response. Fetching the full
+      // roster for every remote heartbeat exhausts the shared function limit.
     });
 
     const unsubRoom = base44.entities.Room.subscribe((e) => {
