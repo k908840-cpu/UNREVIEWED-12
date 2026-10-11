@@ -111,6 +111,7 @@ export function GameProvider({ children }) {
   const advanceCoordinatorRef = useRef(null);
   const answerSubmissionCoordinatorRef = useRef(null);
   const answerRoundKeyRef = useRef("");
+  const resumeAttemptedRef = useRef(false);
 
   if (!advanceCoordinatorRef.current) {
     advanceCoordinatorRef.current = createAdvanceCoordinator({
@@ -744,6 +745,11 @@ export function GameProvider({ children }) {
   // sporadic room deletion. It must remain disabled/unscheduled unless
   // explicitly invoked by an admin or a future scheduled task.
   useEffect(() => {
+    // useNavigate changes identity as routes change. Re-running this recovery
+    // effect on every phase navigation issued a fresh getRoster request from
+    // every browser, even though none of them had reloaded.
+    if (resumeAttemptedRef.current) return undefined;
+    resumeAttemptedRef.current = true;
     const code = getActiveRoomCode();
     if (!code) return;
     const resumeActiveRoom = () => {
@@ -760,8 +766,7 @@ export function GameProvider({ children }) {
     };
     (async () => {
       try {
-        const res = await base44.functions.invoke("room", { action: "getRoster", code, sessionId });
-        const data = res?.data || {};
+        const data = await requestRoster(code, "reconnect");
         if (isRateLimited(data)) { resumeActiveRoom(); return; }
         // Clear only after an authoritative absence/membership result. A 500
         // or transient SDK failure must not discard a valid active session.
@@ -791,7 +796,7 @@ export function GameProvider({ children }) {
         else resumeActiveRoom();
       }
     })();
-  }, [sessionId, resetRoomState, navigate]);
+  }, [sessionId, resetRoomState, navigate, requestRoster]);
 
   // ---- derived game state (sanitized: authors/ratings hidden until results) ----
   const rawGame = room?.game_state;
