@@ -79,6 +79,7 @@ export function GameProvider({ children }) {
   const [chat, setChat] = useState([]);
 
   const seenSelfRef = useRef(false);
+  const roomStatusRef = useRef("");
   const playersRef = useRef([]);
   const rosterDebounceRef = useRef(null);
   const inFlightRosterRef = useRef(false);
@@ -127,6 +128,10 @@ export function GameProvider({ children }) {
       deferredJoinRosterReconciliationRoomRef.current = "";
     }
   }, [players]);
+
+  useEffect(() => {
+    roomStatusRef.current = room?.status || "";
+  }, [room?.status]);
 
   const setVolume = useCallback((v) => { setVol(v); setSfxVolume(v); }, []);
   const toggleMute = useCallback(() => setMutedState((m) => { const next = !m; setSfxMuted(next); return next; }), []);
@@ -215,6 +220,7 @@ export function GameProvider({ children }) {
       const joinedRoom = data.room;
       if (!joinedRoom) throw new Error("join_failed");
       const hostNow = joinedRoom.host_session === sessionId;
+      roomStatusRef.current = joinedRoom.status || "";
       const joinedPlayer = data.player ? mapPlayer(data.player, sessionId, joinedRoom.host_session) : null;
       setRoom(joinedRoom); setMode(joinedRoom.mode); setLength(joinedRoom.length);
       setYou({
@@ -276,6 +282,9 @@ export function GameProvider({ children }) {
   const fetchRoster = useCallback(async (requestedRoomCode = roomCode) => {
     const code = normalizeRoomCode(requestedRoomCode);
     if (!code) return;
+    // Roster membership cannot grow after Start. Ignore delayed create-event
+    // reconciliations once the authoritative Room state is playing.
+    if (roomStatusRef.current === "playing" && lastRosterRequestRef.current.code === code) return;
     if (inFlightRosterRef.current) {
       // The join-specific request was deduplicated against an existing fetch.
       // Do not leave its guard set: a later heartbeat/realtime mismatch can
@@ -408,7 +417,10 @@ export function GameProvider({ children }) {
     try {
       const res = await base44.functions.invoke("room", { action, sessionId, code: roomCode, ...extra });
       const data = res?.data || {};
-      if (data.room) setRoom(data.room);
+      if (data.room) {
+        roomStatusRef.current = data.room.status || roomStatusRef.current;
+        setRoom(data.room);
+      }
       if (data.error) {
         return {
           ...data,
@@ -434,7 +446,10 @@ export function GameProvider({ children }) {
       const res = await base44.functions.invoke("room", { action: "start", code: roomCode, sessionId });
       const data = res?.data || {};
       if (data.error) return { error: data.error, active: data.active };
-      if (data.room) setRoom(data.room);
+      if (data.room) {
+        roomStatusRef.current = data.room.status || roomStatusRef.current;
+        setRoom(data.room);
+      }
       return { ok: true };
     } catch (e) {
       const error = e?.response?.data?.error || "start_failed";
@@ -590,8 +605,16 @@ export function GameProvider({ children }) {
       if (!active) return;
       const d = e?.data || {};
       if (d.room_code && d.room_code !== roomCode) return;
-      // Membership changes still use the server-authoritative roster.
-      if (e.type === "create" || e.type === "delete") { requestRosterReconciliation(); return; }
+      // Membership changes still use the server-authoritative roster. A
+      // create can be replayed after the Room event that starts a game, so
+      // defer it long enough to discard that stale replay.
+      if (e.type === "create") {
+        setTimeout(() => {
+          if (active && roomStatusRef.current !== "playing") requestRosterReconciliation();
+        }, ROSTER_DEBOUNCE_MS);
+        return;
+      }
+      if (e.type === "delete") { requestRosterReconciliation(); return; }
       // RoomPlayer updates are heartbeat/presence writes. Membership is
       // authoritative through create/delete events; connected state is
       // reconciled from each caller's heartbeat response. Fetching the full
@@ -603,6 +626,7 @@ export function GameProvider({ children }) {
       const d = e?.data || {};
       if (d.code !== roomCode) return;
       if (e.type === "delete" || d.status === "closed") { setLeftReason("closed"); return; }
+      roomStatusRef.current = d.status || roomStatusRef.current;
       setRoom(d);
       syncHostSession(d.host_session);
     });
