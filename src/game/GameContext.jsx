@@ -79,7 +79,7 @@ export function GameProvider({ children }) {
   const [chat, setChat] = useState([]);
 
   const seenSelfRef = useRef(false);
-  const roomStatusRef = useRef("");
+  const hostSessionRef = useRef("");
   const playersRef = useRef([]);
   const rosterDebounceRef = useRef(null);
   const inFlightRosterRef = useRef(false);
@@ -130,8 +130,8 @@ export function GameProvider({ children }) {
   }, [players]);
 
   useEffect(() => {
-    roomStatusRef.current = room?.status || "";
-  }, [room?.status]);
+    hostSessionRef.current = room?.host_session || "";
+  }, [room?.host_session]);
 
   const setVolume = useCallback((v) => { setVol(v); setSfxVolume(v); }, []);
   const toggleMute = useCallback(() => setMutedState((m) => { const next = !m; setSfxMuted(next); return next; }), []);
@@ -220,6 +220,7 @@ export function GameProvider({ children }) {
       const joinedRoom = data.room;
       if (!joinedRoom) throw new Error("join_failed");
       const hostNow = joinedRoom.host_session === sessionId;
+      hostSessionRef.current = joinedRoom.host_session || "";
       const joinedPlayer = data.player ? mapPlayer(data.player, sessionId, joinedRoom.host_session) : null;
       setRoom(joinedRoom); setMode(joinedRoom.mode); setLength(joinedRoom.length);
       setYou({
@@ -543,6 +544,7 @@ export function GameProvider({ children }) {
 
     const syncHostSession = (hostSession) => {
       if (typeof hostSession !== "string") return;
+      hostSessionRef.current = hostSession;
       setRoom((current) => {
         if (!current || current.code !== roomCode || current.host_session === hostSession) return current;
         return { ...current, host_session: hostSession };
@@ -586,28 +588,31 @@ export function GameProvider({ children }) {
 
     if (rosterPrimedRoomRef.current === roomCode) {
       rosterPrimedRoomRef.current = "";
-      // A successful join already supplied the self record. Schedule one
-      // shared roster reconciliation after the active-room lifecycle starts;
-      // heartbeat and entity events coalesce into this same read.
-      refreshPlayers();
+      // The successful join supplied the self record. Realtime player-create
+      // events fill the rest of the lobby without every client polling.
     } else fetchRoster();
 
     const unsubPlayers = base44.entities.RoomPlayer.subscribe((e) => {
       if (!active) return;
       const d = e?.data || {};
       if (d.room_code && d.room_code !== roomCode) return;
-      // Realtime can replay a create after this client already received the
-      // same member through its authoritative roster read. Only an unknown
-      // create changes membership locally; deletes always need reconciliation.
+      // Realtime create/delete payloads are sufficient for lobby membership.
+      // Keep getRoster for reconnect/malformed-event recovery only: polling
+      // it in every browser on each join exhausts the shared function limit.
       if (e.type === "create") {
-        // The backend rejects joins while a game is playing, so a create
-        // delivered then is a delayed replay rather than new membership.
-        if (roomStatusRef.current === "playing") return;
-        const alreadyKnown = d.session_id && playersRef.current.some((player) => player.sessionId === d.session_id);
-        if (!alreadyKnown) requestRosterReconciliation();
+        if (!d.session_id) { requestRosterReconciliation(); return; }
+        setPlayers((current) => {
+          if (current.some((player) => player.sessionId === d.session_id)) return current;
+          const hostSession = d.is_host ? d.session_id : hostSessionRef.current;
+          return [...current, mapPlayer(d, sessionId, hostSession)];
+        });
         return;
       }
-      if (e.type === "delete") { requestRosterReconciliation(); return; }
+      if (e.type === "delete") {
+        if (!d.session_id) { requestRosterReconciliation(); return; }
+        setPlayers((current) => current.filter((player) => player.sessionId !== d.session_id));
+        return;
+      }
       // RoomPlayer updates are heartbeat/presence writes. Membership is
       // authoritative through create/delete events; connected state is
       // reconciled from each caller's heartbeat response. Fetching the full
@@ -619,7 +624,7 @@ export function GameProvider({ children }) {
       const d = e?.data || {};
       if (d.code !== roomCode) return;
       if (e.type === "delete" || d.status === "closed") { setLeftReason("closed"); return; }
-      roomStatusRef.current = d.status || roomStatusRef.current;
+      hostSessionRef.current = d.host_session || hostSessionRef.current;
       setRoom(d);
       syncHostSession(d.host_session);
     });
