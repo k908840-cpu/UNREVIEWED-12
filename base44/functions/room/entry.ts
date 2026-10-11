@@ -302,7 +302,7 @@ export default async function (req) {
         if (!room || room.status !== 'playing') return Response.json({ error: 'not_found' }, { status: 404 });
         const gs = room.game_state;
         if (!gs) return Response.json({ error: 'no_game' }, { status: 400 });
-        if (!matchesAdvanceExpectation(gs, body.expected_phase, body.expected_deadline)) {
+        if (!matchesAdvanceExpectation(gs, body.expected_phase, body.expected_deadline, body.expected_round)) {
           return Response.json({ room, advanced: false, stale: true });
         }
         const players = await playersOf(room.code);

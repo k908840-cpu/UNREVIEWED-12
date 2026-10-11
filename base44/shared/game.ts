@@ -153,10 +153,11 @@ export function deadlinePassed(gs: any, now: number): boolean {
 // A client may carry an advance request across a realtime transition. When it
 // includes the phase it observed, do not let that delayed request skip the new
 // phase. Older clients remain compatible by omitting both fields.
-export function matchesAdvanceExpectation(gs: any, expectedPhase: unknown, expectedDeadline: unknown): boolean {
+export function matchesAdvanceExpectation(gs: any, expectedPhase: unknown, expectedDeadline: unknown, expectedRound: unknown): boolean {
   if (typeof expectedPhase !== 'string' || !expectedPhase) return true;
   if (gs?.phase !== expectedPhase) return false;
-  return typeof expectedDeadline !== 'string' || gs?.phase_deadline === expectedDeadline;
+  if (typeof expectedDeadline === 'string' && gs?.phase_deadline !== expectedDeadline) return false;
+  return typeof expectedRound !== 'number' || gs?.round_index === expectedRound;
 }
 
 // Should the current phase auto-advance? (deadline expired OR all eligible

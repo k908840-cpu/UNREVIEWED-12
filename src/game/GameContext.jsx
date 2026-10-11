@@ -12,9 +12,9 @@ import { createAnswerSubmissionCoordinator } from "./answerSubmissionCoordinator
 
 const GameContext = createContext(null);
 
-const FRESH_MS = 30000;
-// Heartbeat interval — presence-only, safely inside the 30s active threshold.
-const HEARTBEAT_MS = 25000;
+const FRESH_MS = 60000;
+// Heartbeat interval — presence-only, safely inside the 60s active threshold.
+const HEARTBEAT_MS = 20000;
 const HEARTBEAT_STAGGER_MS = 2000;
 // Debounce window for coalescing bursts of realtime events into one getRoster.
 const ROSTER_DEBOUNCE_MS = 400;
@@ -539,6 +539,7 @@ export function GameProvider({ children }) {
         // screen represents so that a stale click cannot skip live gameplay.
         expected_phase: opts.expectedPhase || gameState?.phase,
         expected_deadline: opts.expectedDeadline || gameState?.phase_deadline,
+        expected_round: opts.expectedRound ?? gameState?.round_index,
       });
     } finally {
       advanceInFlightRef.current = false;
@@ -661,7 +662,7 @@ export function GameProvider({ children }) {
     // Joining already records a fresh, connected player. Defer and stagger
     // the first presence write so a full lobby does not send four expensive
     // heartbeat transactions alongside its initial sync. The 2s maximum
-    // offset remains inside the 30s active-player window.
+    // offset remains inside the 60s active-player window.
     const heartbeatOffset = [...sessionId].reduce((sum, char) => sum + char.charCodeAt(0), 0) % HEARTBEAT_STAGGER_MS;
     let beatTimer = null;
     const firstBeatTimer = setTimeout(() => {

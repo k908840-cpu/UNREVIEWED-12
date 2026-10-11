@@ -26,7 +26,7 @@ function getPredictionLine(predictedTop, subject) {
 
 export default function RoundResults() {
   const navigate = useNavigate();
-  const { roundResult, players, advance } = useGame();
+  const { roundResult, players, roundIndex, advance } = useGame();
   const [step, setStep] = useState(0);
 
   const ordered = useMemo(() => roundResult ? [...roundResult.ranked].reverse() : [], [roundResult]);
@@ -53,7 +53,7 @@ export default function RoundResults() {
 
   if (!roundResult) {
     return <div className="grid min-h-screen place-items-center px-5 text-center text-[hsl(var(--ink))]">
-      <button onClick={() => advance({ force: true })} className="rounded-full border-4 border-[hsl(var(--ink))] bg-primary px-6 py-3 font-display uppercase text-primary-foreground">Continue →</button>
+      <button onClick={() => advance({ force: true, expectedPhase: "results", expectedRound: roundIndex })} className="rounded-full border-4 border-[hsl(var(--ink))] bg-primary px-6 py-3 font-display uppercase text-primary-foreground">Continue →</button>
     </div>;
   }
 
@@ -110,7 +110,7 @@ export default function RoundResults() {
       <AnimatePresence>
         {step >= totalSteps && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="pb-4 text-center">
-            <button onClick={() => advance({ force: true })} className="inline-flex items-center gap-2 rounded-full border-4 border-[hsl(var(--ink))] bg-primary px-8 py-4 font-display text-2xl uppercase tracking-wide text-primary-foreground shadow-[0_6px_0_0_hsl(var(--ink))]">
+            <button onClick={() => advance({ force: true, expectedPhase: "results", expectedRound: roundIndex })} className="inline-flex items-center gap-2 rounded-full border-4 border-[hsl(var(--ink))] bg-primary px-8 py-4 font-display text-2xl uppercase tracking-wide text-primary-foreground shadow-[0_6px_0_0_hsl(var(--ink))]">
               Leaderboard <ArrowRight size={22} />
             </button>
           </motion.div>

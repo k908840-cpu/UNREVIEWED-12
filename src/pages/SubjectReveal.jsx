@@ -19,7 +19,7 @@ const RING = [
 ];
 
 export default function SubjectReveal() {
-  const { currentSubjectId, players, gamePhase, advance } = useGame();
+  const { currentSubjectId, players, gamePhase, roundIndex, advance } = useGame();
   const [stage, setStage] = useState(0);
   const subject = players.find((p) => p.id === currentSubjectId);
 
@@ -35,7 +35,7 @@ export default function SubjectReveal() {
     // Bind this action to reveal so it cannot force-advance a later phase.
     if (gamePhase !== "reveal") return;
     sfx.whoosh();
-    void advance({ force: true, expectedPhase: "reveal" });
+    void advance({ force: true, expectedPhase: "reveal", expectedRound: roundIndex });
   };
 
   return (

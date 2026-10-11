@@ -26,7 +26,7 @@ export default function Leaderboard() {
   const isLast = roundIndex + 1 >= totalRounds;
   const maxScore = Math.max(1, ...ranked.map((r) => r.score));
 
-  const next = () => { sfx.reveal(); advance({ force: true }); };
+  const next = () => { sfx.reveal(); advance({ force: true, expectedPhase: "leaderboard", expectedRound: roundIndex }); };
   const onEnd = async () => { sfx.tap(); await endGame(); navigate("/"); };
 
   return (

@@ -5,7 +5,7 @@ export const CODE_LENGTH = 4;
 export const MAX_PLAYERS = 8;
 export const MIN_PLAYERS = 4;
 // A player counts as "active" if they checked in within this window.
-export const RECONNECT_WINDOW_MS = 30000;
+export const RECONNECT_WINDOW_MS = 60000;
 // Keep host ownership stable through a missed heartbeat without changing
 // player eligibility for Start or gameplay.
 export const HOST_MIGRATION_GRACE_MS = 60000;
