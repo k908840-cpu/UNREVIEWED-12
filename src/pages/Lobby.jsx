@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Play, Users, Crown, Copy, Check, X, LogOut, WifiOff } from "lucide-react";
+import { Play, Users, Crown, Copy, Check, X, WifiOff } from "lucide-react";
 import { useGame } from "@/game/GameContext";
 import Avatar from "@/components/Avatar";
 import Stamp from "@/components/Stamp";
@@ -15,7 +15,7 @@ export default function Lobby() {
   const navigate = useNavigate();
   const {
     players, roomCode, room, isHost, mode, length,
-    startGame, kickPlayer, leaveRoom, endRoom, leftReason, acknowledgeLeft,
+    startGame, kickPlayer, endRoom, leftReason, acknowledgeLeft,
   } = useGame();
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
@@ -51,7 +51,6 @@ export default function Lobby() {
     sfx.reveal(); navigate("/reveal");
   };
 
-  const leave = async () => { sfx.tap(); await leaveRoom(); navigate("/"); };
   const end = async () => { sfx.tap(); await endRoom(); navigate("/"); };
 
   if (leftReason) {
@@ -74,7 +73,7 @@ export default function Lobby() {
     );
   }
 
-  const lengthLabel = { quick: "Quick · 2 cycles", standard: "Standard · 4 cycles", party: "Party · 5 cycles", endless: "Endless" }[length];
+  const lengthLabel = { quick: "Quick · 2 turns each", standard: "Standard · 4 turns each", party: "Party · 5 turns each", endless: "Endless · keeps going" }[length];
   const slots = [...players, ...Array(Math.max(0, MAX_PLAYERS - players.length)).fill(null)];
 
   return (
@@ -166,11 +165,7 @@ export default function Lobby() {
             <div className="inline-flex items-center gap-2 rounded-full border-2 border-[hsl(var(--ink))] bg-white px-6 py-3.5">
               <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-primary" /> Waiting for the Host to start…
             </div>
-            <div className="mt-5">
-              <button onClick={leave} className="inline-flex items-center gap-1.5 text-xs uppercase tracking-wider opacity-50 hover:opacity-100">
-                <LogOut size={13} /> Leave room
-              </button>
-            </div>
+            <p className="mt-5 text-xs uppercase tracking-wider opacity-50">Use the leave button in the top bar if you need to go.</p>
           </>
         )}
       </div>

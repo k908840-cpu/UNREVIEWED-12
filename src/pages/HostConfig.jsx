@@ -9,10 +9,10 @@ import Stamp from "@/components/Stamp";
 import Scribble from "@/components/Scribble";
 
 const LENGTHS = [
-  { id: "quick", label: "Quick", desc: "2 rounds each", cycles: "2", icon: Zap },
-  { id: "standard", label: "Standard", desc: "4 rounds each", cycles: "4", icon: Clock, recommended: true },
-  { id: "party", label: "Party", desc: "5 rounds each", cycles: "5", icon: Flame },
-  { id: "endless", label: "Endless", desc: "Till somebody cries", cycles: "∞", icon: InfinityIcon },
+  { id: "quick", label: "Quick", desc: "Everyone is the Subject twice.", example: "4 players = 8 rounds", cycles: "2", icon: Zap },
+  { id: "standard", label: "Standard", desc: "Everyone is the Subject four times.", example: "4 players = 16 rounds", cycles: "4", icon: Clock, recommended: true },
+  { id: "party", label: "Party", desc: "Everyone is the Subject five times.", example: "4 players = 20 rounds", cycles: "5", icon: Flame },
+  { id: "endless", label: "Endless", desc: "Keeps extending after every cycle.", example: "No final round", cycles: "∞", icon: InfinityIcon },
 ];
 
 export default function HostConfig() {
@@ -182,6 +182,7 @@ function LengthTicket({ l, active, onClick, rotate }) {
       <div className="mt-2 font-display text-3xl uppercase leading-none">{l.label}</div>
       <div className="mt-1 font-display text-2xl tabular-nums opacity-80">{l.cycles}<span className="ml-1 text-xs lowercase">×each</span></div>
       <div className="mt-1 text-[11px] leading-tight opacity-70">{l.desc}</div>
+      <div className="mt-2 text-[10px] font-bold uppercase tracking-wide opacity-60">{l.example}</div>
     </motion.button>
   );
 }

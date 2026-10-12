@@ -11,6 +11,7 @@ export default function FinalResults() {
   const navigate = useNavigate();
   const { scores, players, history, mode, isHost, resetToLobby, endRoom } = useGame();
   const [stage, setStage] = useState(0);
+  const [actionError, setActionError] = useState("");
 
   const ranked = useMemo(() => players.map((p) => ({ ...p, score: scores[p.id] || 0 })).sort((a, b) => b.score - a.score), [scores, players]);
 
@@ -22,8 +23,20 @@ export default function FinalResults() {
   const second = ranked[1];
   const first = ranked[0];
 
-  const playAgain = async () => { sfx.reveal(); await resetToLobby(); navigate("/lobby"); };
-  const changeMode = async () => { sfx.tap(); await resetToLobby(); navigate("/config"); };
+  const playAgain = async () => {
+    setActionError("");
+    sfx.reveal();
+    const result = await resetToLobby();
+    if (result?.ok) navigate("/lobby");
+    else setActionError("Couldn't reset the room yet. Please try again.");
+  };
+  const changeMode = async () => {
+    setActionError("");
+    sfx.tap();
+    const result = await resetToLobby();
+    if (result?.ok) navigate("/config");
+    else setActionError("Couldn't reset the room yet. Please try again.");
+  };
   const newRoom = async () => { sfx.tap(); await endRoom(); navigate("/"); };
 
   return (
@@ -31,6 +44,7 @@ export default function FinalResults() {
       <div className="text-center">
         <p className="font-heading text-xs font-bold uppercase tracking-[0.3em] text-muted-foreground">Game Over</p>
         <h1 className="text-display text-5xl gold-text sm:text-7xl">FINAL RESULTS</h1>
+        {stage >= 3 && first && <p className="mt-3 font-display text-xl uppercase text-primary">Winner: {first.nickname}</p>}
       </div>
 
       <div className="mt-10 flex items-end justify-center gap-3 sm:gap-6">
@@ -64,10 +78,13 @@ export default function FinalResults() {
         {stage >= 4 && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="mt-auto pt-8">
             {isHost ? (
-              <div className="grid gap-3 sm:grid-cols-3">
-                <ActionBtn onClick={playAgain} icon={RotateCcw} label="Play Again" primary />
-                <ActionBtn onClick={changeMode} icon={Settings} label="Change Mode" />
-                <ActionBtn onClick={newRoom} icon={DoorOpen} label="New Room" />
+              <div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <ActionBtn onClick={playAgain} icon={RotateCcw} label="Play Again" primary />
+                  <ActionBtn onClick={changeMode} icon={Settings} label="Change Mode" />
+                  <ActionBtn onClick={newRoom} icon={DoorOpen} label="New Room" />
+                </div>
+                {actionError && <p role="alert" className="mt-4 text-center text-sm font-semibold text-destructive">{actionError}</p>}
               </div>
             ) : (
               <p className="text-center text-sm opacity-60">Waiting for the host to start a new game…</p>

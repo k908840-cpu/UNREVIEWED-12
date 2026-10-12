@@ -18,14 +18,16 @@ const RANK_LABEL = [
 
 export default function Leaderboard() {
   const navigate = useNavigate();
-  const { scores, players, roundIndex, totalRounds, advance, endGame, isHost } = useGame();
+  const { scores, players, roundIndex, totalRounds, length, advance, endGame, isHost } = useGame();
   const [advancing, setAdvancing] = useState(false);
   const [advanceError, setAdvanceError] = useState("");
 
   useEffect(() => { sfx.lobby(); }, []);
 
   const ranked = useMemo(() => players.map((p) => ({ ...p, score: scores[p.id] || 0 })).sort((a, b) => b.score - a.score), [scores, players]);
-  const isLast = roundIndex + 1 >= totalRounds;
+  // Endless grows its subject plan when a cycle completes. It must never label
+  // the temporary end of that plan as the end of the game.
+  const isLast = length !== "endless" && roundIndex + 1 >= totalRounds;
   const maxScore = Math.max(1, ...ranked.map((r) => r.score));
 
   const next = async () => {
@@ -57,6 +59,9 @@ export default function Leaderboard() {
         <p className="font-heading text-xs font-bold uppercase tracking-[0.3em] opacity-60">Standings</p>
         <h1 className="text-display text-5xl sm:text-6xl">LEADERBOARD</h1>
         <div className="mt-1 flex justify-center"><Scribble color="yellow" width={200} /></div>
+        <p className="mt-3 text-xs font-bold uppercase tracking-wider opacity-60">
+          {length === "endless" ? `Round ${roundIndex + 1} · Endless` : `Round ${roundIndex + 1} of ${totalRounds}`}
+        </p>
       </div>
 
       <div className="relative mt-10 space-y-3">
@@ -109,7 +114,7 @@ export default function Leaderboard() {
           whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
           className="inline-flex items-center gap-2 rounded-full border-4 border-[hsl(var(--ink))] bg-primary px-9 py-4 font-display text-2xl uppercase tracking-wide text-primary-foreground shadow-[0_6px_0_0_hsl(var(--ink))]"
         >
-          {advancing ? "Starting…" : isLast ? "Final Results" : "Next Round"} <ArrowRight size={22} />
+          {advancing ? "Starting…" : isLast ? "Final Results" : length === "endless" ? "Keep It Going" : "Next Round"} <ArrowRight size={22} />
         </motion.button>
         {advanceError && <p role="alert" className="mt-3 text-sm font-semibold text-[hsl(var(--mode-adult))]">{advanceError}</p>}
         {isHost && <div className="mt-4 flex justify-center"><button onClick={onEnd} className="text-xs uppercase tracking-wider opacity-50 hover:opacity-100">Host: End game now</button></div>}

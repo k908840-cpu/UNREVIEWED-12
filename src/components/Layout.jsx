@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useLocation, useNavigate, useOutlet } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { MessageCircle, Home, Star, Settings as SettingsIcon } from "lucide-react";
+import { MessageCircle, Star, Settings as SettingsIcon, LogOut } from "lucide-react";
 import { useGame } from "@/game/GameContext";
 import ChatPanel from "./ChatPanel";
 import VolumeControl from "./VolumeControl";
@@ -10,11 +10,13 @@ import AudioDirector from "./AudioDirector";
 import SettingsPanel from "./SettingsPanel";
 import { cn } from "@/lib/utils";
 import { unlockAudio } from "@/lib/sound";
+import QuitGameDialog from "./QuitGameDialog";
 
 export default function Layout() {
-  const { mode, roomCode, phase } = useGame();
+  const { mode, roomCode, roundIndex, totalRounds, length } = useGame();
   const [chatOpen, setChatOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [quitOpen, setQuitOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
   const outlet = useOutlet();
@@ -59,6 +61,13 @@ export default function Layout() {
     ? "44 96% 56%"
     : mode === "adult" ? "342 88% 60%"
     : "142 66% 56%";
+  const roundLabel = totalRounds > 0
+    ? (length === "endless" ? `Round ${roundIndex + 1} · Endless` : `Round ${roundIndex + 1} of ${totalRounds}`)
+    : "";
+  const goHome = () => {
+    if (roomCode) setQuitOpen(true);
+    else navigate("/");
+  };
 
   return (
     <div className={cn("relative min-h-screen overflow-hidden", showtime ? "bg-background text-foreground" : "bg-cream text-[hsl(var(--cream-foreground))]")} style={{ "--accent": accent }}>
@@ -68,7 +77,7 @@ export default function Layout() {
       {/* top bar */}
       {!isLanding && (
         <header className="sticky top-0 z-30 flex items-center justify-between border-b-2 border-[hsl(var(--ink))] bg-background px-4 py-2.5">
-          <button onClick={() => navigate("/")} className="flex items-center gap-2">
+          <button onClick={goHome} className="flex items-center gap-2" aria-label={roomCode ? "Leave game or stay in game" : "Go to home"}>
             <span className="grid h-8 w-8 place-items-center rounded-lg bg-primary text-primary-foreground"><Star size={18} fill="currentColor" /></span>
             <span className="font-display text-xl leading-none tracking-wide">UNREVIEWED</span>
           </button>
@@ -79,10 +88,20 @@ export default function Layout() {
                 <span className="font-mono text-sm font-bold tracking-widest text-primary">{roomCode}</span>
               </div>
             )}
+            {roundLabel && (
+              <span className="rounded-full border border-border bg-card/60 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-foreground">
+                {roundLabel}
+              </span>
+            )}
             <span className={cn("rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider", mode === "adult" ? "bg-[hsl(var(--mode-adult))]/15 text-[hsl(var(--mode-adult))]" : "bg-[hsl(var(--mode-family))]/15 text-[hsl(var(--mode-family))]")}>
               {mode === "adult" ? "18+ Adults Only" : "Family"}
             </span>
             <VolumeControl compact />
+            {roomCode && (
+              <button onClick={() => setQuitOpen(true)} className="grid h-10 w-10 place-items-center rounded-full border border-border bg-card/60 text-foreground transition hover:border-[hsl(var(--mode-adult))] hover:text-[hsl(var(--mode-adult))]" aria-label="Leave game" title="Leave game">
+                <LogOut size={18} />
+              </button>
+            )}
             <button onClick={() => { setSettingsOpen(true); unlockAudio(); }} className="grid h-10 w-10 place-items-center rounded-full border border-border bg-card/60 text-foreground transition hover:border-primary hover:text-primary" aria-label="Open settings">
               <SettingsIcon size={18} />
             </button>
@@ -112,6 +131,7 @@ export default function Layout() {
       <AudioDirector />
       <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <QuitGameDialog open={quitOpen} onOpenChange={setQuitOpen} />
     </div>
   );
 }

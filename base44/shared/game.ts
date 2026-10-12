@@ -46,22 +46,58 @@ export function buildSubjectOrder(playerIds: string[], cycles: number): string[]
   return order;
 }
 
-const FAMILY_FALLBACK = [
+export const FAMILY_FALLBACK = [
   { id: 'fb_f1', text: "What completely normal hobby would become creepy if [NAME] did it?", category: 'Hobby' },
   { id: 'fb_f2', text: "What's the most embarrassing thing [NAME] could yell at a wedding?", category: 'Social' },
   { id: 'fb_f3', text: "If [NAME] hosted a children's TV show, what would it be called?", category: 'Work' },
   { id: 'fb_f4', text: "What weird food combo would [NAME] defend with their life?", category: 'Food' },
   { id: 'fb_f5', text: "What would [NAME]'s completely honest last words be?", category: 'Absurd' },
   { id: 'fb_f6', text: "What's [NAME]'s worst possible opening line on a dating app?", category: 'Romance' },
+  { id: 'fb_f7', text: "What harmless rule would [NAME] somehow turn into a major scandal?", category: 'Social' },
+  { id: 'fb_f8', text: "What talent does [NAME] think they have but absolutely don't?", category: 'Hobby' },
+  { id: 'fb_f9', text: "If [NAME] was a conspiracy theory, what would it be?", category: 'Absurd' },
+  { id: 'fb_f10', text: "What's [NAME]'s secret midnight snack shame?", category: 'Food' },
+  { id: 'fb_f11', text: "What would [NAME]'s TED talk be titled?", category: 'Work' },
+  { id: 'fb_f12', text: "What wildly impractical pet would [NAME] try to adopt?", category: 'Pets' },
+  { id: 'fb_f13', text: "What would [NAME] pack for a trip that guarantees chaos?", category: 'Travel' },
+  { id: 'fb_f14', text: "What would [NAME] do if they became famous for exactly one day?", category: 'Social' },
+  { id: 'fb_f15', text: "What restaurant would [NAME] accidentally get banned from, and why?", category: 'Food' },
+  { id: 'fb_f16', text: "What excuse would [NAME] give for being late to their own birthday party?", category: 'Work' },
+  { id: 'fb_f17', text: "What would [NAME]'s very unnecessary YouTube channel be called?", category: 'Hobby' },
+  { id: 'fb_f18', text: "If [NAME] had a warning label, what would it say?", category: 'Absurd' },
+  { id: 'fb_f19', text: "What tiny inconvenience would ruin [NAME]'s dream vacation?", category: 'Travel' },
+  { id: 'fb_f20', text: "What would [NAME] say during a silent game that makes everyone laugh?", category: 'Social' },
+  { id: 'fb_f21', text: "What would [NAME] name a signature smoothie nobody wants to try?", category: 'Food' },
+  { id: 'fb_f22', text: "What would [NAME] teach a parrot to say at the worst possible time?", category: 'Pets' },
+  { id: 'fb_f23', text: "What job would [NAME] be hilariously bad at for one surprising reason?", category: 'Work' },
+  { id: 'fb_f24', text: "What fake holiday would [NAME] insist everyone celebrate?", category: 'Absurd' },
 ];
 
-const ADULT_FALLBACK = [
+export const ADULT_FALLBACK = [
   { id: 'fb_a1', text: "What's the worst thing [NAME] could accidentally text their boss?", category: 'Tech' },
   { id: 'fb_a2', text: "What did [NAME] do at the party that nobody will ever speak of again?", category: 'Party' },
   { id: 'fb_a3', text: "What's [NAME]'s darkest search history entry?", category: 'Dark' },
   { id: 'fb_a4', text: "What would [NAME] do for a Klondike bar that they'd never admit?", category: 'Absurd' },
   { id: 'fb_a5', text: "What's the most morally bankrupt thing [NAME] would do for $50?", category: 'Crime' },
-  { id: 'fb_a6', text: "What would [NAME] get cancelled on the internet for?", category: 'Social' },
+  { id: 'fb_a6', text: "What's [NAME]'s worst habit that their therapist doesn't know about?", category: 'Dark' },
+  { id: 'fb_a7', text: "What would [NAME] get cancelled on the internet for?", category: 'Social' },
+  { id: 'fb_a8', text: "What's the most inappropriate thing [NAME] has said in bed?", category: 'Romance' },
+  { id: 'fb_a9', text: "What crime would [NAME] commit if there were zero consequences?", category: 'Crime' },
+  { id: 'fb_a10', text: "What's [NAME]'s most questionable shower thought?", category: 'Absurd' },
+  { id: 'fb_a11', text: "What's [NAME]'s go-to excuse for leaving a date early?", category: 'Party' },
+  { id: 'fb_a12', text: "What would [NAME]'s browser history reveal in court?", category: 'Tech' },
+  { id: 'fb_a13', text: "What was [NAME]'s most overconfident dating-app bio?", category: 'Dating' },
+  { id: 'fb_a14', text: "What would [NAME] do if an ex walked into the party with a microphone?", category: 'Exes' },
+  { id: 'fb_a15', text: "What's [NAME]'s worst attempt at flirting that they still think worked?", category: 'Flirting' },
+  { id: 'fb_a16', text: "What did [NAME] say after two drinks that changed the group chat forever?", category: 'Party' },
+  { id: 'fb_a17', text: "What's the most suspicious reason [NAME] would give after a questionable hookup?", category: 'Dating' },
+  { id: 'fb_a18', text: "What harmless secret would [NAME] reveal at the worst possible dinner?", category: 'Secrets' },
+  { id: 'fb_a19', text: "What would [NAME] make their wildly unnecessary apology video about?", category: 'Dark' },
+  { id: 'fb_a20', text: "What would [NAME]'s ex warn the next person about?", category: 'Exes' },
+  { id: 'fb_a21', text: "What's [NAME]'s most cursed opening line after midnight?", category: 'Flirting' },
+  { id: 'fb_a22', text: "What would [NAME] be caught doing in the background of a party photo?", category: 'Party' },
+  { id: 'fb_a23', text: "What decision would [NAME] defend with the phrase 'it made sense at the time'?", category: 'Questionable' },
+  { id: 'fb_a24', text: "What bizarre hill would [NAME] die on during an argument at 2 a.m.?", category: 'Dark' },
 ];
 
 export async function selectPrompt(

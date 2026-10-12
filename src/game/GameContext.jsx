@@ -9,6 +9,7 @@ import {
 } from "@/lib/session";
 import { advanceFallbackDelay, createAdvanceCoordinator, createAdvanceRequestGate, phaseDeadlineKey } from "./advanceCoordinator";
 import { createAnswerSubmissionCoordinator } from "./answerSubmissionCoordinator";
+import { createLeaveRoomCoordinator } from "./leaveRoomCoordinator";
 import { createRosterRequestController, isRosterRequestTimeout } from "./rosterRequest";
 import { noteBackendBuild } from "@/lib/build-info";
 
@@ -119,6 +120,9 @@ export function GameProvider({ children }) {
   const answerRoundKeyRef = useRef("");
   const predictionRoundKeyRef = useRef("");
   const resumeAttemptedRef = useRef(false);
+  const leaveRequestRef = useRef(null);
+  const resetRoomStateRef = useRef(() => {});
+  const leaveCoordinatorRef = useRef(null);
 
   if (!rosterControllerRef.current) {
     // Owns the roster in-flight guard: bounded by a timeout, late responses
@@ -147,6 +151,12 @@ export function GameProvider({ children }) {
     predictionSubmissionCoordinatorRef.current = createAnswerSubmissionCoordinator({
       submit: (answerId) => predictionRequestRef.current?.(answerId) || { error: "submission_unavailable", ambiguous: true },
       reconcile: () => predictionReconcileRef.current?.() || { error: "reconciliation_unavailable", ambiguous: true },
+    });
+  }
+  if (!leaveCoordinatorRef.current) {
+    leaveCoordinatorRef.current = createLeaveRoomCoordinator({
+      send: () => leaveRequestRef.current?.() || { error: "leave_unavailable", retryable: true },
+      onSuccess: () => resetRoomStateRef.current(),
     });
   }
 
@@ -199,6 +209,7 @@ export function GameProvider({ children }) {
     setYou({ nickname: "", photo: null, avatar: PRESET_AVATARS[0] });
     setLeftReason(null); setPhase("landing");
   }, []);
+  resetRoomStateRef.current = resetRoomState;
 
   // ---- lobby actions (unchanged) ----
   const createRoom = useCallback(async () => {
@@ -318,10 +329,28 @@ export function GameProvider({ children }) {
     try { await base44.functions.invoke("room", { action: "kick", code: roomCode, sessionId, target_session: targetSession }); } catch {}
   }, [roomCode, sessionId]);
 
-  const leaveRoom = useCallback(async () => {
-    try { if (roomCode) await base44.functions.invoke("room", { action: "leave", code: roomCode, sessionId }); } catch {}
-    resetRoomState();
-  }, [roomCode, sessionId, resetRoomState]);
+  const requestLeaveRoom = useCallback(async () => {
+    // No active room is already a successful local leave.  A real room only
+    // clears local state after the backend has removed this exact participant.
+    if (!roomCode) return { ok: true };
+    try {
+      const res = await base44.functions.invoke("room", { action: "leave", code: roomCode, sessionId });
+      noteBackendBuild(res);
+      const data = res?.data || {};
+      if (data.error) return { ...data, retryable: isRateLimited(data) };
+      return data.ok === true ? { ok: true } : { error: "leave_failed", retryable: true };
+    } catch (e) {
+      const status = Number(e?.response?.status) || null;
+      return {
+        error: e?.response?.data?.error || e?.message || "leave_failed",
+        status,
+        retryable: status === null || status === 429 || status >= 500,
+      };
+    }
+  }, [roomCode, sessionId]);
+  leaveRequestRef.current = requestLeaveRoom;
+
+  const leaveRoom = useCallback(() => leaveCoordinatorRef.current.leave(), []);
 
   const endRoom = useCallback(async () => {
     try { if (roomCode) await base44.functions.invoke("room", { action: "close", code: roomCode, sessionId }); } catch {}
@@ -658,11 +687,20 @@ export function GameProvider({ children }) {
   }, [callRoom, resetRoomState]);
 
   const resetToLobby = useCallback(async () => {
-    if (!roomCode || !isHost) return;
+    if (!roomCode || !isHost) return { error: "not_host" };
     try {
       const res = await base44.functions.invoke("room", { action: "reset_to_lobby", code: roomCode, sessionId });
-      if (res?.data?.room) setRoom(res.data.room);
-    } catch {}
+      noteBackendBuild(res);
+      const data = res?.data || {};
+      if (data.error) return data;
+      if (!data.room) return { error: "reset_failed" };
+      roomStatusRef.current = data.room.status || "lobby";
+      roomPhaseRef.current = "";
+      setRoom(data.room);
+      return { ok: true };
+    } catch (e) {
+      return { error: e?.response?.data?.error || e?.message || "reset_failed" };
+    }
   }, [roomCode, sessionId, isHost]);
 
   const goToProfile = useCallback(() => setPhase("profile"), []);
