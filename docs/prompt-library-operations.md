@@ -5,10 +5,16 @@ repository**. The fallback lists are source-controlled resilience content; they
 are not an export of the live Base44 `Prompt` entity and must not be used to
 infer how many live prompts exist.
 
+> **Current approved library and update procedure:** see `prompt-library/README.md`
+> (150 prompts, 18 approved Adult replacements, record-specific update steps, and the
+> `[prompt-pool]` server log events). The selector now requests an explicit sort and
+> limit, validates each record's `mode`, and logs database failures separately from an
+> empty collection.
+
 The server selects prompts from Base44 with this filter:
 
 ```ts
-base44.asServiceRole.entities.Prompt.filter({ mode, active: true })
+base44.asServiceRole.entities.Prompt.filter({ mode, active: true }, 'prompt_key', 1000)
 ```
 
 It then avoids already-used prompt keys where possible, avoids the immediately

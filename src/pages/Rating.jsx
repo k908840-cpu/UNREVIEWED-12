@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Eye, SkipForward, Lock } from "lucide-react";
 import { useGame } from "@/game/GameContext";
+import { fillPrompt } from "@/lib/promptText";
 import StarRating from "@/components/StarRating";
 import Timer from "@/components/Timer";
 import Stamp from "@/components/Stamp";
@@ -20,7 +21,7 @@ export default function Rating() {
   const isAuthor = current?.playerId === you?.id;
   const youEligible = !isSubject && !isAuthor;
 
-  const displayPrompt = (currentPrompt?.text || "").replace(/\[NAME\]/g, subject?.nickname || "[NAME]");
+  const displayPrompt = fillPrompt(currentPrompt?.text, subject?.nickname);
   const activeCount = players.filter((p) => p.connected).length;
   const eligibleCount = Math.max(0, activeCount - 2); // minus subject and author
 

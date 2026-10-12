@@ -3,6 +3,11 @@
 // generate their own subject, prompt, answers, ratings, or scores.
 
 import { activePlayers } from './rooms.ts';
+import {
+  MIN_HEALTHY_PROMPT_POOL, PROMPT_QUERY_LIMIT, PROMPT_QUERY_SORT,
+  buildPromptPool, describeError, logPromptPool, normalizeMode,
+  type PoolDiagnostics,
+} from './promptPool.ts';
 
 export const PHASE_DURATIONS: Record<string, number> = {
   reveal: 5,
@@ -100,28 +105,57 @@ export const ADULT_FALLBACK = [
   { id: 'fb_a24', text: "What bizarre hill would [NAME] die on during an argument at 2 a.m.?", category: 'Dark' },
 ];
 
-export async function selectPrompt(
+export type SelectedPrompt = { id: string; text: string; category: string };
+
+// Returns the chosen prompt plus where the pool came from, so callers and tests
+// can tell a healthy database read from a fallback. selectPrompt() below keeps
+// the original return shape.
+export async function selectPromptDetailed(
   base44: any,
   mode: string,
   usedIds: string[],
   lastCategory: string | null,
   subjectSeenCategories: string[],
-): Promise<{ id: string; text: string; category: string }> {
-  let pool: any[] = [];
-  try {
-    const rows = await base44.asServiceRole.entities.Prompt.filter({ mode, active: true });
-    pool = (rows || []).map((r: any) => ({
-      id: r.prompt_key || r.id,
-      text: r.text,
-      category: r.category || 'General',
-    }));
-  } catch { /* use fallback */ }
+): Promise<{ prompt: SelectedPrompt; source: 'database' | 'fallback'; fallbackReason?: string; diagnostics?: PoolDiagnostics }> {
+  const safeMode = normalizeMode(mode);
+  let pool: SelectedPrompt[] = [];
+  let source: 'database' | 'fallback' = 'database';
+  let fallbackReason: string | undefined;
+  let diagnostics: PoolDiagnostics | undefined;
 
-  if (!pool.length) pool = mode === 'adult' ? ADULT_FALLBACK : FAMILY_FALLBACK;
+  try {
+    // Explicit sort + limit: do not depend on the platform's default page size.
+    const rows = await base44.asServiceRole.entities.Prompt.filter(
+      { mode: safeMode, active: true }, PROMPT_QUERY_SORT, PROMPT_QUERY_LIMIT,
+    );
+    const built = buildPromptPool(safeMode, Array.isArray(rows) ? rows : []);
+    pool = built.pool;
+    diagnostics = built.diagnostics;
+    if (!pool.length) fallbackReason = diagnostics.fetched === 0 ? 'db_empty' : 'no_usable_rows';
+  } catch (e) {
+    fallbackReason = 'db_error';
+    logPromptPool('error', 'db_error', { mode: safeMode, message: describeError(e) });
+  }
+
+  if (fallbackReason) {
+    source = 'fallback';
+    pool = safeMode === 'adult' ? ADULT_FALLBACK : FAMILY_FALLBACK;
+    if (fallbackReason !== 'db_error') logPromptPool('error', fallbackReason, { mode: safeMode, ...diagnostics });
+  } else if (diagnostics) {
+    const d = diagnostics;
+    if (d.truncated) logPromptPool('warn', 'query_limit_reached', { mode: safeMode, limit: PROMPT_QUERY_LIMIT, fetched: d.fetched });
+    if (d.small_pool) logPromptPool('warn', 'small_pool', { mode: safeMode, usable: d.usable, min: MIN_HEALTHY_PROMPT_POOL });
+    const flagged = d.excluded.wrong_mode + d.excluded.inactive + d.excluded.blank_text
+      + d.missing_key + d.duplicate_key + d.duplicate_text + d.missing_placeholder;
+    if (flagged) logPromptPool('warn', 'integrity', { ...d });
+  }
 
   const usedSet = new Set(usedIds);
   let candidates = pool.filter((p) => !usedSet.has(p.id));
-  if (!candidates.length) candidates = pool.slice();
+  if (!candidates.length) {
+    candidates = pool.slice();
+    logPromptPool('warn', 'pool_exhausted', { mode: safeMode, source, pool: pool.length, used: usedIds.length });
+  }
 
   const varied = candidates.filter((p) => p.category !== lastCategory);
   if (varied.length) candidates = varied;
@@ -132,7 +166,18 @@ export async function selectPrompt(
   }
 
   if (!candidates.length) candidates = pool;
-  return candidates[Math.floor(Math.random() * candidates.length)];
+  const prompt = candidates[Math.floor(Math.random() * candidates.length)];
+  return { prompt, source, fallbackReason, diagnostics };
+}
+
+export async function selectPrompt(
+  base44: any,
+  mode: string,
+  usedIds: string[],
+  lastCategory: string | null,
+  subjectSeenCategories: string[],
+): Promise<SelectedPrompt> {
+  return (await selectPromptDetailed(base44, mode, usedIds, lastCategory, subjectSeenCategories)).prompt;
 }
 
 export function computeResults(

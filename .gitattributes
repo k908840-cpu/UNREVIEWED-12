@@ -1,0 +1,2 @@
+# Keep the prompt data byte-exact on every platform (no CRLF conversion).
+prompt-library/* -text

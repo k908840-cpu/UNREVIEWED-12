@@ -11,6 +11,7 @@ import { advanceFallbackDelay, createAdvanceCoordinator, createAdvanceRequestGat
 import { createAnswerSubmissionCoordinator } from "./answerSubmissionCoordinator";
 import { createLeaveRoomCoordinator } from "./leaveRoomCoordinator";
 import { createRosterRequestController, isRosterRequestTimeout } from "./rosterRequest";
+import { saveRoomConfig } from "./saveRoomConfig";
 import { noteBackendBuild } from "@/lib/build-info";
 
 const GameContext = createContext(null);
@@ -316,14 +317,21 @@ export function GameProvider({ children }) {
     }
   }, [sessionId, pendingRoomCode]);
 
+  // Saves the host's mode/length and reports whether the server confirmed it.
+  // Callers must not continue to the lobby/game on { ok: false }. Host rights are
+  // enforced by the server (config answers 403 "forbidden" to anyone else), so no
+  // client-side isHost check here: after a refresh on the config screen the pending
+  // room code survives but isHost resets to false until the room is re-read.
   const persistConfig = useCallback(async (m, l) => {
     const code = roomCode || pendingRoomCode;
-    if (!code || !isHost) return;
-    try {
-      const res = await base44.functions.invoke("room", { action: "config", code, sessionId, mode: m, length: l });
-      if (res?.data?.room) setRoom(res.data.room);
-    } catch { /* non-critical */ }
-  }, [roomCode, pendingRoomCode, isHost, sessionId]);
+    if (!code) return { ok: false, error: "no_room" };
+    const result = await saveRoomConfig({
+      invoke: (name, payload) => base44.functions.invoke(name, payload),
+      code, sessionId, mode: m, length: l,
+    });
+    if (result.ok) setRoom(result.room);
+    return result;
+  }, [roomCode, pendingRoomCode, sessionId]);
 
   const kickPlayer = useCallback(async (targetSession) => {
     try { await base44.functions.invoke("room", { action: "kick", code: roomCode, sessionId, target_session: targetSession }); } catch {}

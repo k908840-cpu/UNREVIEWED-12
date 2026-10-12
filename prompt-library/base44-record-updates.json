@@ -1,0 +1,110 @@
+[
+  {
+    "id": "6aae3c4a6e142998a117db3f",
+    "prompt_key": "a001",
+    "old_text": "What's something [NAME] is way too confident they're good at?",
+    "new_text": "What would [NAME] say during sex that would make someone immediately call an Uber?"
+  },
+  {
+    "id": "6aae3c4a6e142998a117db40",
+    "prompt_key": "a002",
+    "old_text": "What completely normal hobby would become creepy if [NAME] did it?",
+    "new_text": "[NAME] gets exposed in a celebrity sex scandal. What's the most embarrassing detail?"
+  },
+  {
+    "id": "6aae3c4a6e142998a117db41",
+    "prompt_key": "a003",
+    "old_text": "What's something you'd trust a stranger with before trusting [NAME]?",
+    "new_text": "What's the one thing you'd never trust [NAME] to do at a bachelor or bachelorette party?"
+  },
+  {
+    "id": "6aae3c4a6e142998a117db43",
+    "prompt_key": "a005",
+    "old_text": "What would [NAME] somehow make worse by helping?",
+    "new_text": "[NAME] accidentally becomes the face of a fetish website. What's their slogan?"
+  },
+  {
+    "id": "6aae3c4a6e142998a117db49",
+    "prompt_key": "a011",
+    "old_text": "Write the title of [NAME]'s autobiography.",
+    "new_text": "Write the title of [NAME]'s extremely disappointing sex tape."
+  },
+  {
+    "id": "6aae3c4a6e142998a117db4b",
+    "prompt_key": "a013",
+    "old_text": "What's the one thing nobody should ever ask [NAME] for advice about?",
+    "new_text": "What's the worst advice [NAME] could give someone about losing their virginity?"
+  },
+  {
+    "id": "6aae3c4a6e142998a117db62",
+    "prompt_key": "a036",
+    "old_text": "What's the most suspicious thing police could find in [NAME]'s car?",
+    "new_text": "Police raid [NAME]'s house. What's the one thing even the officers refuse to touch?"
+  },
+  {
+    "id": "6aae3c4a6e142998a117db65",
+    "prompt_key": "a039",
+    "old_text": "What's the dumbest crime [NAME] could successfully pull off?",
+    "new_text": "[NAME] commits the world's dumbest crime. What was the motive?"
+  },
+  {
+    "id": "6aae3c4a6e142998a117db75",
+    "prompt_key": "a055",
+    "old_text": "What's the least heroic way [NAME] could save someone's life?",
+    "new_text": "[NAME] saves someone's life, but somehow makes it deeply inappropriate. How?"
+  },
+  {
+    "id": "6aae3c4a6e142998a117db7d",
+    "prompt_key": "a063",
+    "old_text": "Which website would you be least surprised to discover [NAME] moderates?",
+    "new_text": "[NAME] gets caught moderating an extremely disturbing online community. What's it called?"
+  },
+  {
+    "id": "6aae3c4a6e142998a117db82",
+    "prompt_key": "a068",
+    "old_text": "What's the worst company [NAME] could become CEO of?",
+    "new_text": "[NAME] launches a company that's immediately investigated. What does it sell?"
+  },
+  {
+    "id": "6aae3c4a6e142998a117db83",
+    "prompt_key": "a069",
+    "old_text": "[NAME] becomes a billionaire. What's their first terrible purchase?",
+    "new_text": "[NAME] wins $10 million. What's their most sexually questionable purchase?"
+  },
+  {
+    "id": "6aae3c4a6e142998a117db85",
+    "prompt_key": "a071",
+    "old_text": "Write the worst possible line on [NAME]'s résumé.",
+    "new_text": "What's the most disturbing thing [NAME] could list under 'special skills' on their résumé?"
+  },
+  {
+    "id": "6aae3c4a6e142998a117db88",
+    "prompt_key": "a074",
+    "old_text": "Write a one-star review of [NAME] as a roommate.",
+    "new_text": "Write a one-star review of [NAME] as a one-night stand."
+  },
+  {
+    "id": "6aae3c4a6e142998a117db89",
+    "prompt_key": "a075",
+    "old_text": "[NAME] becomes your doctor. What's your first concern?",
+    "new_text": "[NAME] becomes a doctor. What sentence gets their medical licence revoked?"
+  },
+  {
+    "id": "6aae3c4a6e142998a117db8d",
+    "prompt_key": "a079",
+    "old_text": "[NAME] becomes president. What's banned first?",
+    "new_text": "[NAME] becomes president. What's their first wildly inappropriate executive order?"
+  },
+  {
+    "id": "6aae3c4a6e142998a117db8f",
+    "prompt_key": "a081",
+    "old_text": "Scientists clone [NAME]. What's the first problem?",
+    "new_text": "Scientists clone [NAME]. What disgusting habit makes them destroy the clone?"
+  },
+  {
+    "id": "6aae3c4a6e142998a117db95",
+    "prompt_key": "a087",
+    "old_text": "What animal would immediately reject [NAME] as one of its own?",
+    "new_text": "[NAME] gets banned from an adult store. What did they do?"
+  }
+]

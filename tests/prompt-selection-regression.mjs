@@ -12,7 +12,7 @@ assert.ok(ADULT_FALLBACK.every((prompt) => prompt.id.startsWith('fb_a')));
 
 let filterArguments;
 const databasePrompts = [
-  { prompt_key: 'adult-1', text: 'Adult database prompt', category: 'Dating' },
+  { prompt_key: 'adult-1', mode: 'adult', text: 'Adult database prompt', category: 'Dating' },
 ];
 const fakeBase44 = {
   asServiceRole: {
@@ -40,9 +40,9 @@ const categoryBase44 = {
         filter: async (filter) => {
           filterCalls.push(filter);
           return [
-            { prompt_key: 'used', text: 'Already used', category: 'Party' },
-            { prompt_key: 'repeat-category', text: 'Same category', category: 'Party' },
-            { prompt_key: 'fresh', text: 'Fresh category', category: 'Exes' },
+            { prompt_key: 'used', mode: 'adult', text: 'Already used', category: 'Party' },
+            { prompt_key: 'repeat-category', mode: 'adult', text: 'Same category', category: 'Party' },
+            { prompt_key: 'fresh', mode: 'adult', text: 'Fresh category', category: 'Exes' },
           ];
         },
       },

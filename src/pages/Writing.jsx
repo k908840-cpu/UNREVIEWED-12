@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Send, EyeOff, SkipForward, Star } from "lucide-react";
 import { useGame } from "@/game/GameContext";
+import { fillPrompt } from "@/lib/promptText";
 import Avatar from "@/components/Avatar";
 import Timer from "@/components/Timer";
 import Stamp from "@/components/Stamp";
@@ -22,7 +23,7 @@ export default function Writing() {
   const eligible = players.filter((p) => p.id !== currentSubjectId && p.connected);
   const submitted = !!myAnswerId;
 
-  const displayPrompt = (currentPrompt?.text || "").replace(/\[NAME\]/g, subject?.nickname || "[NAME]");
+  const displayPrompt = fillPrompt(currentPrompt?.text, subject?.nickname);
 
   const submit = async () => {
     if (!text.trim() || submitted || submitting) return;

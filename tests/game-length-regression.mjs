@@ -15,7 +15,7 @@ const base44 = {
       Prompt: {
         filter: async ({ mode, active: isActive }) => {
           assert.equal(isActive, true);
-          return [{ prompt_key: `${mode}-prompt`, text: `${mode} prompt`, category: 'Test' }];
+          return [{ prompt_key: `${mode}-prompt`, mode, text: `${mode} prompt`, category: 'Test' }];
         },
       },
     },

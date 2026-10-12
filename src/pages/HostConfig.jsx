@@ -19,6 +19,8 @@ export default function HostConfig() {
   const navigate = useNavigate();
   const { mode, setMode, length, setLength, goToProfile, persistConfig } = useGame();
   const [showAdultWarning, setShowAdultWarning] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   const pickMode = (m) => {
     if (m === "adult" && mode !== "adult") { setShowAdultWarning(true); return; }
@@ -27,7 +29,24 @@ export default function HostConfig() {
 
   const confirmAdult = () => { setMode("adult"); setShowAdultWarning(false); sfx.reveal(); };
 
-  const next = () => { sfx.lobby(); persistConfig(mode, length); goToProfile(); navigate("/profile"); };
+  // The room must have the chosen mode saved before anyone moves on: otherwise an
+  // Adults pick could silently fall back to the Family room created earlier.
+  const next = async () => {
+    if (saving) return;
+    setSaving(true); setSaveError("");
+    const result = await persistConfig(mode, length);
+    setSaving(false);
+    if (!result?.ok) {
+      sfx.wrong();
+      setSaveError(
+        result?.error === "forbidden" ? "Only the room's host can change the game settings."
+          : result?.error === "in_progress" ? "This game has already started."
+            : "Couldn't save your game settings. Check your connection and try again.",
+      );
+      return;
+    }
+    sfx.lobby(); goToProfile(); navigate("/profile");
+  };
 
   return (
     <div className="mx-auto max-w-4xl px-5 py-8">
@@ -82,11 +101,13 @@ export default function HostConfig() {
       <div className="mt-10 text-center">
         <motion.button
           onClick={next}
+          disabled={saving}
           whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
-          className="inline-flex items-center gap-2 rounded-full bg-primary px-9 py-4 font-display text-2xl uppercase tracking-wide text-primary-foreground shadow-[0_6px_0_0_hsl(250_20%_9%)]"
+          className="inline-flex items-center gap-2 rounded-full bg-primary px-9 py-4 font-display text-2xl uppercase tracking-wide text-primary-foreground shadow-[0_6px_0_0_hsl(250_20%_9%)] disabled:opacity-60"
         >
-          Let's go <ArrowRight size={22} />
+          {saving ? "Saving…" : "Let's go"} <ArrowRight size={22} />
         </motion.button>
+        {saveError && <p role="alert" className="mt-3 text-sm font-semibold text-[hsl(var(--mode-adult))]">{saveError}</p>}
       </div>
 
       {/* adult warning modal */}
