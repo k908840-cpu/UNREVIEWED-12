@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.44';
 import { makeCode, normalizeCode, MAX_PLAYERS, MIN_PLAYERS, HOST_MIGRATION_GRACE_MS, isActive, activePlayers, selectActiveHost } from '../../shared/rooms.ts';
+import { BACKEND_BUILD_ID, BACKEND_BUILD_HEADER } from '../../shared/build.ts';
 import { PHASE_DURATIONS, LENGTH_CYCLES, buildSubjectOrder, selectPrompt, tryAdvance, doAdvance, matchesAdvanceExpectation } from '../../shared/game.ts';
 
 const LENGTHS = ['quick', 'standard', 'party', 'endless'];
@@ -9,7 +10,7 @@ const rid = () => Math.random().toString(36).slice(2, 9);
 // directly; every mutation is validated here against the caller's session id
 // and the room's stored host_session. All round state is authoritative —
 // clients render shared state, they never generate their own.
-export default async function (req) {
+async function handle(req) {
   try {
     const base44 = createClientFromRequest(req);
     const body = await req.json().catch(() => ({}));
@@ -56,8 +57,9 @@ export default async function (req) {
         const room = await findRoom(body.code);
         if (!room) return Response.json({ error: 'not_found' }, { status: 404 });
         if (room.status === 'closed') return Response.json({ error: 'closed' }, { status: 410 });
-        const players = await playersOf(room.code);
-        return Response.json({ room, active_count: activePlayers(players, now).length });
+        // No RoomPlayer read: the client only needs the room record here.
+        // (active_count was never consumed by any client.)
+        return Response.json({ room, build: BACKEND_BUILD_ID });
       }
 
       // Server-authoritative roster fetch. Clients never read RoomPlayer
@@ -71,7 +73,7 @@ export default async function (req) {
         if (!players.find((p) => p.session_id === sessionId)) {
           return Response.json({ error: 'not_in_room' }, { status: 403 });
         }
-        return Response.json({ room, players: displayRoster(players) });
+        return Response.json({ room, players: displayRoster(players), build: BACKEND_BUILD_ID });
       }
 
       case 'join': {
@@ -89,7 +91,7 @@ export default async function (req) {
             nickname, avatar_id: avatarId, photo_url: photo, connected: true, last_seen: nowIso,
             is_host: room.host_session === sessionId,
           });
-          return Response.json({ room, player, players: displayRoster(players.map((p) => p.id === player.id ? player : p)) });
+          return Response.json({ room, player, players: displayRoster(players.map((p) => p.id === player.id ? player : p)), build: BACKEND_BUILD_ID });
         }
         if (activePlayers(players, now).length >= (room.max_players || MAX_PLAYERS)) {
           return Response.json({ error: 'full' }, { status: 409 });
@@ -101,7 +103,7 @@ export default async function (req) {
         // The joining browser needs an authoritative lobby snapshot
         // immediately. Returning it with join avoids an additional getRoster
         // request from every browser during a multi-player join burst.
-        return Response.json({ room, player, players: displayRoster([...players, player]) });
+        return Response.json({ room, player, players: displayRoster([...players, player]), build: BACKEND_BUILD_ID });
       }
 
       case 'heartbeat': {
@@ -147,6 +149,7 @@ export default async function (req) {
 
         return Response.json({
           ok: true,
+          build: BACKEND_BUILD_ID,
           host_session: hostSession,
           active_session_ids: activePlayers(freshPlayers, now).map((p) => p.session_id),
           roster_session_ids: freshPlayers.map((p) => p.session_id),
@@ -347,4 +350,12 @@ export default async function (req) {
   } catch (error) {
     return Response.json({ error: error.message }, { status: 500 });
   }
+}
+
+// Stamp every response with the backend revision for diagnostics. The header is
+// best-effort; `build` is also included in the body of diagnostic actions.
+export default async function (req) {
+  const res = await handle(req);
+  try { res.headers.set(BACKEND_BUILD_HEADER, BACKEND_BUILD_ID); } catch { /* immutable headers: body field still carries build */ }
+  return res;
 }

@@ -9,6 +9,8 @@ import {
 } from "@/lib/session";
 import { advanceFallbackDelay, createAdvanceCoordinator, createAdvanceRequestGate, phaseDeadlineKey } from "./advanceCoordinator";
 import { createAnswerSubmissionCoordinator } from "./answerSubmissionCoordinator";
+import { createRosterRequestController, isRosterRequestTimeout } from "./rosterRequest";
+import { noteBackendBuild } from "@/lib/build-info";
 
 const GameContext = createContext(null);
 
@@ -90,7 +92,8 @@ export function GameProvider({ children }) {
   const roomPhaseRef = useRef("");
   const playersRef = useRef([]);
   const rosterDebounceRef = useRef(null);
-  const inFlightRosterRef = useRef(false);
+  const requestRosterRef = useRef(null);
+  const rosterControllerRef = useRef(null);
   const lastRosterRequestRef = useRef({ code: "", at: 0 });
   const backoffRef = useRef(0);
   const backoffTimerRef = useRef(null);
@@ -117,6 +120,13 @@ export function GameProvider({ children }) {
   const predictionRoundKeyRef = useRef("");
   const resumeAttemptedRef = useRef(false);
 
+  if (!rosterControllerRef.current) {
+    // Owns the roster in-flight guard: bounded by a timeout, late responses
+    // from timed-out/superseded requests are dropped (see rosterRequest.js).
+    rosterControllerRef.current = createRosterRequestController({
+      request: (code, reason) => requestRosterRef.current(code, reason),
+    });
+  }
   if (!advanceCoordinatorRef.current) {
     advanceCoordinatorRef.current = createAdvanceCoordinator({
       send: () => advanceRequestRef.current?.() || { error: "advance_unavailable" },
@@ -183,7 +193,7 @@ export function GameProvider({ children }) {
     predictionSubmissionCoordinatorRef.current?.reset();
     if (rosterDebounceRef.current) { clearTimeout(rosterDebounceRef.current); rosterDebounceRef.current = null; }
     if (backoffTimerRef.current) { clearTimeout(backoffTimerRef.current); backoffTimerRef.current = null; }
-    backoffRef.current = 0; inFlightRosterRef.current = false;
+    backoffRef.current = 0; rosterControllerRef.current?.invalidate();
     lastRosterRequestRef.current = { code: "", at: 0 };
     setRoomCode(""); setPendingRoomCodeState(""); setRoom(null); setIsHost(false); setPlayers([]);
     setYou({ nickname: "", photo: null, avatar: PRESET_AVATARS[0] });
@@ -209,6 +219,7 @@ export function GameProvider({ children }) {
     const code = normalizeRoomCode(rawCode);
     try {
       const res = await base44.functions.invoke("room", { action: "lookup", code, sessionId });
+      noteBackendBuild(res);
       const data = res?.data || {};
       if (data.error) return { error: data.error };
       if (data.room.status === "playing") return { error: "in_progress" };
@@ -234,8 +245,10 @@ export function GameProvider({ children }) {
     const res = await base44.functions.invoke("room", {
       action: "getRoster", code, sessionId, client_reason: clientReason,
     });
+    noteBackendBuild(res);
     return res?.data || {};
   }, [sessionId]);
+  requestRosterRef.current = requestRoster;
 
   const commitJoin = useCallback(async ({ nickname, avatar, photo, roomCode: requestedRoomCode }) => {
     const joiningCode = normalizeRoomCode(requestedRoomCode || pendingRoomCode);
@@ -325,7 +338,7 @@ export function GameProvider({ children }) {
     // Roster membership cannot grow after Start. Ignore delayed create-event
     // reconciliations once the authoritative Room state is playing.
     if (roomStatusRef.current === "playing" && lastRosterRequestRef.current.code === code) return;
-    if (inFlightRosterRef.current) {
+    if (rosterControllerRef.current.isInFlight()) {
       // The join-specific request was deduplicated against an existing fetch.
       // Do not leave its guard set: a later heartbeat/realtime mismatch can
       // then use the normal debounced reconciliation path.
@@ -353,7 +366,6 @@ export function GameProvider({ children }) {
       return;
     }
     lastRosterRequestRef.current = { code, at: now };
-    inFlightRosterRef.current = true;
     const isInitialJoinHydration = initialJoinHydrationRoomRef.current === code;
     if (isInitialJoinHydration) initialJoinHydrationInFlightRoomRef.current = code;
     let initialHydrationSucceeded = false;
@@ -369,7 +381,11 @@ export function GameProvider({ children }) {
       }, next);
     };
     try {
-      const data = await requestRoster(code, clientReason);
+      // Bounded + single-flight: a stalled request times out, releases the
+      // guard, and its late response is never applied (rosterRequest.js).
+      const outcome = await rosterControllerRef.current.run(code, clientReason);
+      if (outcome.stale) return;
+      const data = outcome.data;
       // A prior room may finish after leave/rejoin. It must not overwrite the
       // current room's authoritative state.
       if (activeRoomCodeRef.current !== code) return;
@@ -415,13 +431,14 @@ export function GameProvider({ children }) {
       setPlayers(mapped);
     } catch (e) {
       if (activeRoomCodeRef.current !== code) return;
-      if (isRateLimited(null, e)) {
+      // A timed-out roster request is retried through the same backoff as a
+      // rate-limit, so recovery does not wait for the next lobby tick.
+      if (isRateLimited(null, e) || isRosterRequestTimeout(e)) {
         if (isInitialJoinHydration) initialHydrationRateLimited = true;
         handleRateLimit();
       }
       // transient — don't clear room state
     } finally {
-      if (activeRoomCodeRef.current === code) inFlightRosterRef.current = false;
       if (initialJoinHydrationInFlightRoomRef.current === code) {
         initialJoinHydrationInFlightRoomRef.current = "";
       }
@@ -729,6 +746,7 @@ export function GameProvider({ children }) {
     const beat = async () => {
       try {
         const res = await base44.functions.invoke("room", { action: "heartbeat", code: roomCode, sessionId });
+        noteBackendBuild(res);
         if (active) reconcileHeartbeat(res?.data || {});
       } catch {}
     };
