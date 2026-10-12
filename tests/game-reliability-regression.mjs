@@ -179,6 +179,24 @@ async function normalHeartbeatAvoidsRedundantEntityReads() {
   assert.match(heartbeat, /selectActiveHost\(freshPlayers, now, HOST_MIGRATION_GRACE_MS\)/, 'host migration must keep using the 60-second grace window');
 }
 
+async function lobbyReconciliationIsHostOwnedAndHonorsBackoff() {
+  const context = await readFile(path.join(ROOT, 'src/game/GameContext.jsx'), 'utf8');
+  const lobbySync = context.slice(context.indexOf('const syncLobbyRoster = () =>'), context.indexOf('return () => {', context.indexOf('const syncLobbyRoster = () =>')));
+
+  assert.match(lobbySync, /if \(!active \|\| !isHost \|\| roomStatusRef\.current !== "lobby"\) return/,
+    'only the current host should reconcile a lobby roster');
+  assert.match(lobbySync, /refreshPlayersRef\.current\(\{ reason: "lobby-sync" \}\)/,
+    'the periodic reconciliation must use the path that respects an active backoff');
+  assert.doesNotMatch(lobbySync, /fetchRosterRef\.current\(roomCode, "lobby-sync"\)/,
+    'the periodic reconciliation must not bypass rate-limit backoff');
+  assert.match(lobbySync, /setTimeout\(syncLobbyRoster, LOBBY_ROSTER_SYNC_MS\)/,
+    'the host should continue reconciling for the life of the lobby');
+  assert.match(context, /const LOBBY_ROSTER_INITIAL_SYNC_MS = 5000/);
+  assert.match(context, /const LOBBY_ROSTER_SYNC_MS = 10000/);
+  assert.doesNotMatch(context, /LOBBY_ROSTER_FAST_SYNC_MS|LOBBY_ROSTER_FAST_WINDOW_MS/,
+    'the former two-second lobby polling loop must be removed');
+}
+
 async function manualNextRoundQueuesBehindAnUnrelatedAdvance() {
   let releasePrevious;
   const calls = [];
@@ -324,6 +342,7 @@ delayedAdvanceCannotSkipTheNextServerPhase();
 await disconnectedHostDoesNotStrandFallback();
 heartbeatKeepsPresenceAndMigratesOnlyAfterTheReconnectWindow();
 await normalHeartbeatAvoidsRedundantEntityReads();
+await lobbyReconciliationIsHostOwnedAndHonorsBackoff();
 await manualNextRoundQueuesBehindAnUnrelatedAdvance();
 await duplicateManualNextRoundDoesNotQueueTwice();
 await rateLimitedAnswerIsReconciledBeforeRetrying();

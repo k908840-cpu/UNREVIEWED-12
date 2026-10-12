@@ -23,11 +23,11 @@ const ROSTER_DEBOUNCE_MS = 400;
 // coalesce follow-up events long enough to keep gameplay transitions quiet.
 const ROSTER_MIN_REQUEST_INTERVAL_MS = 2000;
 // A join response is a point-in-time roster snapshot. While the room is still
-// open to new players, reconcile it periodically rather than reacting to every
-// delayed subscription replay. This timer is always stopped at game start.
-const LOBBY_ROSTER_SYNC_MS = 5000;
-const LOBBY_ROSTER_FAST_SYNC_MS = 2000;
-const LOBBY_ROSTER_FAST_WINDOW_MS = 15000;
+// open to new players, the current host reconciles it periodically. Keeping
+// this to one client avoids turning a full lobby into a getRoster request storm.
+// The timer is always stopped at game start.
+const LOBBY_ROSTER_INITIAL_SYNC_MS = 5000;
+const LOBBY_ROSTER_SYNC_MS = 10000;
 // Exponential backoff for rate-limit errors (ms).
 const BACKOFF_BASE_MS = 2000;
 const BACKOFF_MAX_MS = 30000;
@@ -743,17 +743,17 @@ export function GameProvider({ children }) {
       beatTimer = setInterval(beat, HEARTBEAT_MS);
     }, HEARTBEAT_MS + heartbeatOffset);
 
-    const lobbyFastUntil = Date.now() + LOBBY_ROSTER_FAST_WINDOW_MS;
     let lobbySyncTimer = null;
     const syncLobbyRoster = () => {
-      if (!active || roomStatusRef.current !== "lobby") return;
-      fetchRosterRef.current(roomCode, "lobby-sync");
-      const delay = Date.now() < lobbyFastUntil ? LOBBY_ROSTER_FAST_SYNC_MS : ROSTER_MIN_REQUEST_INTERVAL_MS;
-      lobbySyncTimer = setTimeout(syncLobbyRoster, delay);
+      if (!active || !isHost || roomStatusRef.current !== "lobby") return;
+      // Use the normal refresh path so a rate-limit backoff cannot be reset by
+      // this recurring lobby reconciliation.
+      refreshPlayersRef.current({ reason: "lobby-sync" });
+      lobbySyncTimer = setTimeout(syncLobbyRoster, LOBBY_ROSTER_SYNC_MS);
     };
     const firstLobbySyncTimer = setTimeout(() => {
       syncLobbyRoster();
-    }, LOBBY_ROSTER_SYNC_MS);
+    }, LOBBY_ROSTER_INITIAL_SYNC_MS);
 
     return () => {
       active = false;
@@ -765,7 +765,7 @@ export function GameProvider({ children }) {
       if (rosterDebounceRef.current) { clearTimeout(rosterDebounceRef.current); rosterDebounceRef.current = null; }
       if (backoffTimerRef.current) { clearTimeout(backoffTimerRef.current); backoffTimerRef.current = null; }
     };
-  }, [roomCode, sessionId, fetchRoster, refreshPlayers]);
+  }, [roomCode, sessionId, fetchRoster, refreshPlayers, isHost]);
 
   // ---- centralized game-phase navigation ----
   useEffect(() => {
