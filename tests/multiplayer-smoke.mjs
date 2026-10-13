@@ -5,7 +5,8 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const APP_URL = 'https://rate-your-mates.base44.app';
+const APP_URL = process.env.UNREVIEWED_BASE_URL || 'https://rate-your-mates.base44.app';
+const CLEANUP_ROOM = process.env.UNREVIEWED_CLEANUP !== '0';
 const PLAYERS = ['Alpha', 'Bravo', 'Charlie', 'Delta'];
 const TIMEOUT = 60_000;
 const POLL = 250;
@@ -444,6 +445,31 @@ async function writeArtifacts(summary) {
   ]);
 }
 
+// The smoke test creates a real, isolated room. Leave it through the same
+// dialog a player uses so a normal backend leave/migration path performs the
+// cleanup. This is deliberately best-effort: diagnostic artifacts from the
+// primary test failure must never be hidden by a cleanup failure.
+async function leaveTestRoom(pages) {
+  if (!CLEANUP_ROOM || !roomCode) return [];
+  const cleanupErrors = [];
+  for (let index = pages.length - 1; index >= 0; index -= 1) {
+    const page = pages[index];
+    if (page.isClosed()) continue;
+    try {
+      const exit = page.getByRole('button', { name: /^Leave game$/i });
+      if (!await visible(exit) || !await exit.isEnabled()) continue;
+      await exit.click({ timeout: 3_000 });
+      const confirm = page.getByRole('button', { name: /^Leave Game$/i });
+      await waitUntil(async () => await visible(confirm) && await confirm.isEnabled(), `${PLAYERS[index]}'s Leave Game confirmation`, 5_000);
+      await confirm.click({ timeout: 3_000 });
+      await waitUntil(() => route(page) === '/', `${PLAYERS[index]} to leave the test room`, 10_000);
+    } catch (error) {
+      cleanupErrors.push({ player: PLAYERS[index], error: error.message, at: new Date().toISOString() });
+    }
+  }
+  return cleanupErrors;
+}
+
 await mkdir(RESULTS, { recursive: true });
 const startedAt = new Date().toISOString();
 let browser;
@@ -451,6 +477,7 @@ let contexts = [];
 let pages = [];
 let roomCode = null;
 let failure = null;
+let cleanupErrors = [];
 
 try {
   await step('launch four independent Chromium contexts', async () => {
@@ -502,13 +529,15 @@ try {
   try { if (pages.length) await screenshot(pages, `failure-${currentStep}`); }
   catch (captureError) { consoleErrors.push({ type: 'artifact-error', text: captureError.message, at: new Date().toISOString() }); }
 } finally {
+  try { cleanupErrors = await leaveTestRoom(pages); }
+  catch (cleanupError) { cleanupErrors.push({ player: 'cleanup', error: cleanupError.message, at: new Date().toISOString() }); }
   await Promise.allSettled(contexts.map((context) => context.close()));
   if (browser) await browser.close();
   const summary = {
     status: failure ? 'failed' : 'passed', startedAt, completedAt: new Date().toISOString(), appUrl: APP_URL,
     roomCode, players: PLAYERS, lastStep: currentStep,
     failure: failure ? { message: failure.message, stack: failure.stack } : null,
-    artifacts: { screenshots, consoleErrors, roomRequests, failedRoomRequests },
+    artifacts: { screenshots, consoleErrors, roomRequests, failedRoomRequests, cleanupErrors },
   };
   await writeArtifacts(summary);
   if (failure) {
