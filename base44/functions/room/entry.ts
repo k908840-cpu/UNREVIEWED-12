@@ -171,6 +171,10 @@ async function handle(req) {
               await Player.update(next.id, { is_host: true });
             } else {
               await Room.update(room.id, { status: 'closed' });
+              // A room with no active successor cannot be resumed. Remove
+              // only this room's remaining stale memberships so closed rooms
+              // do not leave a misleading roster behind.
+              await Player.deleteMany({ room_code: room.code });
             }
           }
         }

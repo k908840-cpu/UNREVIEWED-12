@@ -11,6 +11,7 @@ import SettingsPanel from "./SettingsPanel";
 import { cn } from "@/lib/utils";
 import { unlockAudio } from "@/lib/sound";
 import QuitGameDialog from "./QuitGameDialog";
+import { installActiveRoomBackGuard } from "@/game/activeRoomBackGuard";
 
 export default function Layout() {
   const { mode, roomCode, roundIndex, totalRounds, length } = useGame();
@@ -26,6 +27,35 @@ export default function Layout() {
   }));
   const [isExitingRoute, setIsExitingRoute] = useState(false);
   const pendingRouteRef = useRef(null);
+  const activeRoomRouteRef = useRef(`${location.pathname}${location.search}${location.hash}`);
+
+  useEffect(() => {
+    activeRoomRouteRef.current = `${location.pathname}${location.search}${location.hash}`;
+  }, [location.pathname, location.search, location.hash]);
+
+  useEffect(() => {
+    const isCapacitorNative = window.Capacitor?.isNativePlatform?.() === true;
+    if (!roomCode || !isCapacitorNative) return undefined;
+    const openQuitDialog = (event) => {
+      event?.preventDefault?.();
+      setQuitOpen(true);
+    };
+    const removeHistoryGuard = installActiveRoomBackGuard({
+      getProtectedPath: () => activeRoomRouteRef.current,
+      navigate,
+      onLeaveIntent: openQuitDialog,
+    });
+    // Capacitor's App plugin handles the hardware button even when a refreshed
+    // WebView has no browser-history entry. The document event remains a
+    // compatibility fallback for Capacitor's Cordova bridge.
+    document.addEventListener("backbutton", openQuitDialog);
+    const appBackListener = window.Capacitor?.Plugins?.App?.addListener?.("backButton", openQuitDialog);
+    return () => {
+      removeHistoryGuard();
+      document.removeEventListener("backbutton", openQuitDialog);
+      Promise.resolve(appBackListener).then((listener) => listener?.remove?.());
+    };
+  }, [roomCode, navigate]);
 
   // Keep the current route element mounted for its entire exit animation.
   // The next element is held outside AnimatePresence until onExitComplete;

@@ -10,6 +10,7 @@ import {
 import { advanceFallbackDelay, createAdvanceCoordinator, createAdvanceRequestGate, phaseDeadlineKey } from "./advanceCoordinator";
 import { createAnswerSubmissionCoordinator } from "./answerSubmissionCoordinator";
 import { createLeaveRoomCoordinator } from "./leaveRoomCoordinator";
+import { removeDepartedPlayers } from "./rosterPresence";
 import { createRosterRequestController, isRosterRequestTimeout } from "./rosterRequest";
 import { saveRoomConfig } from "./saveRoomConfig";
 import { noteBackendBuild } from "@/lib/build-info";
@@ -764,7 +765,16 @@ export function GameProvider({ children }) {
         // The initial post-join fetch is already in flight. Remember a real
         // membership mismatch, but let that fetch settle before using the
         // normal debounced reconciliation path.
-        if (rosterChanged) requestRosterReconciliation();
+        if (rosterChanged) {
+          if (roomStatusRef.current === "playing") {
+            // Membership is fixed after Start. A heartbeat can therefore
+            // remove a departed player locally without the roster polling
+            // that previously caused rate-limit storms during gameplay.
+            setPlayers((current) => removeDepartedPlayers(current, data.roster_session_ids));
+          } else {
+            requestRosterReconciliation();
+          }
+        }
       }
     };
 
