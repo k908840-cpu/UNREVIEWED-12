@@ -57,6 +57,7 @@ export default function SettingsPanel({ open, onClose }) {
 
 function ChannelRow({ icon: Icon, label, channel, s }) {
   const c = s[channel];
+  const controlId = `settings-${channel}-volume`;
   return (
     <div className="rounded-2xl border-2 border-[hsl(var(--ink))] bg-white/70 p-4">
       <div className="flex items-center justify-between">
@@ -64,11 +65,12 @@ function ChannelRow({ icon: Icon, label, channel, s }) {
           <Icon size={18} className="text-[hsl(var(--ink))]" />
           <span className="font-heading text-sm font-bold uppercase tracking-wide">{label}</span>
         </div>
-        <Toggle on={c.on} onChange={(v) => updateChannel(channel, { on: v })} />
+        <Toggle label={`${c.on ? "Turn off" : "Turn on"} ${label}`} on={c.on} onChange={(v) => updateChannel(channel, { on: v })} />
       </div>
       <div className={cn("mt-3 flex items-center gap-3 transition-opacity", !c.on && "opacity-40")}>
         <input
-          type="range" min={0} max={1} step={0.05} value={c.volume} disabled={!c.on}
+          id={controlId} type="range" min={0} max={1} step={0.05} value={c.volume} disabled={!c.on}
+          aria-label={`${label} volume`}
           onChange={(e) => updateChannel(channel, { volume: parseFloat(e.target.value) })}
           className="w-full accent-[hsl(var(--primary))]"
         />
@@ -88,17 +90,18 @@ function ToggleRow({ icon: Icon, label, desc, on, onChange }) {
           <div className="text-xs opacity-60">{desc}</div>
         </div>
       </div>
-      <Toggle on={on} onChange={onChange} />
+      <Toggle label={`${on ? "Turn off" : "Turn on"} ${label}`} on={on} onChange={onChange} />
     </div>
   );
 }
 
-function Toggle({ on, onChange }) {
+function Toggle({ label, on, onChange }) {
   return (
     <button
       onClick={() => onChange(!on)}
       className={cn("relative h-7 w-12 shrink-0 rounded-full border-2 border-[hsl(var(--ink))] transition", on ? "bg-primary" : "bg-white")}
       aria-pressed={on}
+      aria-label={label}
     >
       <span className={cn("absolute top-0.5 h-5 w-5 rounded-full border-2 border-[hsl(var(--ink))] bg-white transition-all", on ? "left-[22px]" : "left-0.5")} />
     </button>

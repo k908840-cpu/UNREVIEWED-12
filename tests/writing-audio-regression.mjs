@@ -57,7 +57,8 @@ globalThis.clearInterval = () => {};
 globalThis.setTimeout = (callback) => { callback(); return 1; };
 
 try {
-  const { music } = await import(new URL('../src/lib/sound.js', import.meta.url));
+  const { music, unlockAudio } = await import(new URL('../src/lib/sound.js', import.meta.url));
+  await unlockAudio();
   for (const track of ['lobby', 'writing', 'rating', 'prediction', 'results']) {
     assert.doesNotThrow(() => music.play(track));
     music.stop();

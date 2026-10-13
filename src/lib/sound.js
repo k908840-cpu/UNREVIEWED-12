@@ -1,7 +1,7 @@
-// UNREVIEWED audio engine — Web Audio synth (no asset files).
-// Playful, mischievous party-game direction. All sounds are temporary
-// and replaceable: swap the synth bodies for real samples later without
-// changing the public API (sfx.*, music.*, useAudioSettings).
+// UNREVIEWED audio engine — original Web Audio synth (no asset files).
+// The loops and effects are generated locally so they can ship in the Android
+// app without downloading third-party audio. Keep the public API stable when
+// replacing a synth voice with a licensed sample in the future.
 import { useEffect, useState } from "react";
 
 const STORAGE_KEY = "unreviewed:settings:v2";
@@ -18,7 +18,7 @@ const DEFAULT_SETTINGS = {
 function loadSettings() {
   if (typeof window === "undefined") return { ...DEFAULT_SETTINGS };
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage?.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_SETTINGS };
     const p = JSON.parse(raw);
     return {
@@ -50,7 +50,7 @@ export function updateChannel(channel, patch) {
   return settings;
 }
 function persist() {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)); } catch {}
+  try { window.localStorage?.setItem(STORAGE_KEY, JSON.stringify(settings)); } catch {}
 }
 
 export function useAudioSettings() {
@@ -58,7 +58,7 @@ export function useAudioSettings() {
   useEffect(() => {
     const l = (v) => setS(v);
     listeners.add(l);
-    return () => listeners.delete(l);
+    return () => { listeners.delete(l); };
   }, []);
   return s;
 }
@@ -68,11 +68,14 @@ export function prefersReducedMotion() { return !!settings.reducedMotion; }
 // ---- audio context + gains ----
 let ctx = null, masterGain, musicGain, sfxGain, voiceGain;
 let _masterMuted = false, _masterVolume = 0.85;
+let audioUnlocked = false;
+let appIsForeground = true;
+let removeUnlockListeners = null;
 
-function ensure() {
+function createContext() {
   if (typeof window === "undefined") return null;
   if (!ctx) {
-    const AC = window.AudioContext || window.webkitAudioContext;
+    const AC = window.AudioContext;
     if (!AC) return null;
     ctx = new AC();
     masterGain = ctx.createGain(); masterGain.connect(ctx.destination);
@@ -81,14 +84,35 @@ function ensure() {
     voiceGain = ctx.createGain(); voiceGain.connect(masterGain);
     applyAudioSettings();
   }
-  if (ctx.state === "suspended") ctx.resume();
   return ctx;
+}
+
+function canPlay(channel) {
+  return !!(
+    audioUnlocked
+    && appIsForeground
+    && ctx?.state === "running"
+    && effective(channel) > 0
+  );
+}
+
+function resumeContext() {
+  if (!audioUnlocked) return Promise.resolve(null);
+  const ac = createContext();
+  if (!ac) return Promise.resolve(null);
+  if (ac.state !== "suspended") return Promise.resolve(ac);
+  return Promise.resolve(ac.resume())
+    .then(() => ac)
+    .catch(() => null);
 }
 
 function effective(channel) {
   const c = settings[channel];
   if (!c.on || _masterMuted) return 0;
-  return Math.max(0, Math.min(1, c.volume * _masterVolume));
+  // Music is intentionally lower than SFX at every slider position. This
+  // leaves room for countdowns, submissions, and result reveals.
+  const headroom = channel === "music" ? 0.55 : 1;
+  return Math.max(0, Math.min(1, c.volume * _masterVolume * headroom));
 }
 function applyAudioSettings() {
   if (!ctx) return;
@@ -96,8 +120,12 @@ function applyAudioSettings() {
   musicGain.gain.setTargetAtTime(effective("music"), now, 0.08);
   sfxGain.gain.setTargetAtTime(effective("sfx"), now, 0.04);
   voiceGain.gain.setTargetAtTime(effective("voice"), now, 0.04);
-  if (settings.music.on && currentTrack && !_masterMuted) startScheduler();
-  if (!settings.music.on || _masterMuted) stopScheduler();
+  // A pending route-change crossfade must never restore an old volume after a
+  // player changes a setting or mutes the game.
+  if (musicTransitionTimer) clearTimeout(musicTransitionTimer);
+  musicTransitionTimer = null;
+  if (canPlay("music") && currentTrack) startScheduler();
+  else stopScheduler();
 }
 
 // legacy master mute/volume (kept for the quick VolumeControl in the top bar)
@@ -108,7 +136,8 @@ export function getVolume() { return _masterVolume; }
 
 // ---- low-level voices ----
 function sTone(freq, dur = 0.15, type = "sine", gain = 0.3, when = 0, glideTo = null) {
-  const ac = ensure(); if (!ac) return;
+  if (!canPlay("sfx")) return;
+  const ac = ctx; if (!ac) return;
   const t0 = ac.currentTime + when;
   const osc = ac.createOscillator(), g = ac.createGain();
   osc.type = type;
@@ -121,7 +150,8 @@ function sTone(freq, dur = 0.15, type = "sine", gain = 0.3, when = 0, glideTo = 
   osc.start(t0); osc.stop(t0 + dur + 0.03);
 }
 function sNoise(dur = 0.2, gain = 0.2, when = 0, hp = false) {
-  const ac = ensure(); if (!ac) return;
+  if (!canPlay("sfx")) return;
+  const ac = ctx; if (!ac) return;
   const t0 = ac.currentTime + when;
   const len = Math.max(1, Math.floor(ac.sampleRate * dur));
   const buf = ac.createBuffer(1, len, ac.sampleRate);
@@ -137,6 +167,7 @@ function sNoise(dur = 0.2, gain = 0.2, when = 0, hp = false) {
 
 // music voices -> musicGain
 function mTone(freq, dur, type, gain, when) {
+  if (!canPlay("music")) return;
   const ac = ctx; if (!ac) return;
   const t0 = ac.currentTime + when;
   const osc = ac.createOscillator(), g = ac.createGain();
@@ -196,11 +227,15 @@ function playStep(track, s, t) {
   if (b) mTone(b, 0.22, track.bassType, 0.16, t - ctx.currentTime);
   const stab = track.stab[s];
   if (stab) (Array.isArray(stab) ? stab : [stab]).forEach((f) => mTone(f, 0.16, track.stabType, 0.07, t - ctx.currentTime));
+  // A very soft high tick gives the procedural loop a party-game pulse
+  // without adding a repetitive, attention-grabbing drum sample.
+  if (track.hat[s]) mTone(2200, 0.035, "square", 0.018, t - ctx.currentTime);
 }
 
 function startScheduler() {
   if (schedulerId) return;
-  const ac = ensure(); if (!ac) return;
+  if (!canPlay("music")) return;
+  const ac = ctx; if (!ac) return;
   nextNoteTime = ac.currentTime + 0.08;
   step = 0;
   schedulerId = setInterval(() => {
@@ -225,33 +260,62 @@ function rampTo(node, target, time = 0.3) {
   node.gain.linearRampToValueAtTime(Math.max(0.0001, target), now + time);
 }
 
+let musicTransitionTimer = null;
+function crossfadeMusic(target) {
+  if (!ctx || !musicGain) return;
+  if (musicTransitionTimer) clearTimeout(musicTransitionTimer);
+  rampTo(musicGain, target * 0.35, 0.2);
+  musicTransitionTimer = setTimeout(() => {
+    musicTransitionTimer = null;
+    rampTo(musicGain, target, 0.35);
+  }, 220);
+}
+
+function pauseMusicForBackground() {
+  appIsForeground = false;
+  stopScheduler();
+  if (ctx?.state === "running") return Promise.resolve(ctx.suspend()).catch(() => undefined);
+  return Promise.resolve();
+}
+
+function resumeMusicAfterBackground() {
+  appIsForeground = true;
+  if (!audioUnlocked || !currentTrack || !settings.music.on || _masterMuted) return Promise.resolve();
+  return resumeContext().then((ac) => {
+    if (ac && canPlay("music")) startScheduler();
+  });
+}
+
 export const music = {
   play(track) {
-    const ac = ensure(); if (!ac) return;
     if (!TRACKS[track]) return;
     if (currentTrack === track) { // ensure audible if just toggled on
-      if (settings.music.on && !_masterMuted) startScheduler();
+      if (canPlay("music")) startScheduler();
       return;
     }
     currentTrack = TRACKS[track];
+    if (!canPlay("music")) return;
     startScheduler();
     // smooth crossfade dip so the loop change isn't abrupt
     const target = effective("music");
-    rampTo(musicGain, target * 0.35, 0.2);
-    setTimeout(() => rampTo(musicGain, target, 0.35), 220);
+    crossfadeMusic(target);
   },
   stop() {
     currentTrack = null;
     stopScheduler();
+    if (musicTransitionTimer) clearTimeout(musicTransitionTimer);
+    musicTransitionTimer = null;
     if (ctx) rampTo(musicGain, 0, 0.3);
   },
+  pause: pauseMusicForBackground,
+  resume: resumeMusicAfterBackground,
   sting(name) {
     if (name === "winner") winnerSting();
   },
 };
 
 function winnerSting() {
-  const ac = ensure(); if (!ac) return;
+  if (!canPlay("music")) return;
   const seq = [N.C4, N.E4, N.G4, N.C5, N.E5];
   seq.forEach((f, i) => mTone(f, 0.3, "triangle", 0.18, i * 0.09));
   mTone(N.C2, 0.6, "triangle", 0.18, 0);
@@ -286,5 +350,39 @@ export const sfx = {
   lobby() { sTone(440, 0.1, "sine", 0.1); sTone(550, 0.12, "sine", 0.1, 0.08); },
 };
 
-// unlock audio on first user gesture
-export function unlockAudio() { ensure(); }
+// Android WebViews and mobile browsers reject autoplay. Route changes can set
+// the desired track, but only a real user gesture creates/resumes the context.
+export function unlockAudio() {
+  audioUnlocked = true;
+  return resumeContext().then((ac) => {
+    if (!ac) return null;
+    applyAudioSettings();
+    if (currentTrack && canPlay("music")) startScheduler();
+    return ac;
+  });
+}
+
+export function armAudioUnlock() {
+  if (typeof window === "undefined" || removeUnlockListeners) return removeUnlockListeners || (() => {});
+  const events = ["pointerdown", "touchstart", "keydown"];
+  const onInteraction = () => {
+    removeUnlockListeners?.();
+    void unlockAudio();
+  };
+  removeUnlockListeners = () => {
+    events.forEach((event) => window.removeEventListener(event, onInteraction, true));
+    removeUnlockListeners = null;
+  };
+  events.forEach((event) => window.addEventListener(event, onInteraction, { capture: true, passive: true }));
+  return removeUnlockListeners;
+}
+
+// Kept intentionally small and non-sensitive for regression diagnostics.
+export function getAudioDiagnostics() {
+  return {
+    unlocked: audioUnlocked,
+    contextState: ctx?.state || "none",
+    schedulerRunning: !!schedulerId,
+    trackActive: !!currentTrack,
+  };
+}

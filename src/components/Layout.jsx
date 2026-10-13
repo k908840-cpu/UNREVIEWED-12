@@ -9,7 +9,7 @@ import AmbientBackdrop from "./AmbientBackdrop";
 import AudioDirector from "./AudioDirector";
 import SettingsPanel from "./SettingsPanel";
 import { cn } from "@/lib/utils";
-import { unlockAudio } from "@/lib/sound";
+import { armAudioUnlock, unlockAudio } from "@/lib/sound";
 import QuitGameDialog from "./QuitGameDialog";
 import { installActiveRoomBackGuard } from "@/game/activeRoomBackGuard";
 
@@ -81,7 +81,9 @@ export default function Layout() {
     document.documentElement.classList.add(mode === "adult" ? "mode-adult" : "mode-family");
   }, [mode]);
 
-  useEffect(() => { unlockAudio(); }, []);
+  // Register a gesture listener without attempting autoplay. The first tap,
+  // touch, or key press unlocks Web Audio on Android and desktop browsers.
+  useEffect(() => armAudioUnlock(), []);
 
   const isLanding = location.pathname === "/";
   const showtime = location.pathname === "/reveal" || location.pathname === "/final";
