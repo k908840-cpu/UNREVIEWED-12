@@ -13,6 +13,7 @@ import { createLeaveRoomCoordinator } from "./leaveRoomCoordinator";
 import { removeDepartedPlayers } from "./rosterPresence";
 import { createRosterRequestController, isRosterRequestTimeout } from "./rosterRequest";
 import { saveRoomConfig } from "./saveRoomConfig";
+import { classifySavedRoomResponse, isCurrentSavedRoomRecovery } from "./savedRoomRecovery";
 import { noteBackendBuild } from "@/lib/build-info";
 
 const GameContext = createContext(null);
@@ -75,6 +76,7 @@ function mapPlayer(rp, sessionId, hostSession) {
 export function GameProvider({ children }) {
   const navigate = useNavigate();
   const sessionId = useRef(getSessionId()).current;
+  const persistedRoomCode = useRef(getActiveRoomCode() || "").current;
 
   const [mode, setMode] = useState("family");
   const [length, setLength] = useState("standard");
@@ -85,6 +87,9 @@ export function GameProvider({ children }) {
   const [you, setYou] = useState({ nickname: "", photo: null, avatar: PRESET_AVATARS[0] });
   const [players, setPlayers] = useState([]);
   const [leftReason, setLeftReason] = useState(null);
+  const [resumeOffer, setResumeOffer] = useState(() => (
+    persistedRoomCode ? { code: persistedRoomCode, status: "checking", error: "" } : null
+  ));
   const [phase, setPhase] = useState("landing");
   const [volume, setVol] = useState(0.7);
   const [muted, setMutedState] = useState(false);
@@ -102,7 +107,7 @@ export function GameProvider({ children }) {
   const backoffTimerRef = useRef(null);
   const fetchRosterRef = useRef(async () => {});
   const refreshPlayersRef = useRef(() => {});
-  const activeRoomCodeRef = useRef(getActiveRoomCode() || "");
+  const activeRoomCodeRef = useRef(persistedRoomCode);
   const rosterPrimedRoomRef = useRef("");
   const joinedRosterRoomRef = useRef("");
   const initialJoinHydrationRoomRef = useRef("");
@@ -122,9 +127,17 @@ export function GameProvider({ children }) {
   const answerRoundKeyRef = useRef("");
   const predictionRoundKeyRef = useRef("");
   const resumeAttemptedRef = useRef(false);
+  const savedRoomRecoveryAttemptRef = useRef(0);
+  const resumeOfferRef = useRef(null);
   const leaveRequestRef = useRef(null);
   const resetRoomStateRef = useRef(() => {});
   const leaveCoordinatorRef = useRef(null);
+  const savedRoomLeaveCoordinatorRef = useRef(null);
+
+  const setResumeOfferState = useCallback((offer) => {
+    resumeOfferRef.current = offer;
+    setResumeOffer(offer);
+  }, []);
 
   if (!rosterControllerRef.current) {
     // Owns the roster in-flight guard: bounded by a timeout, late responses
@@ -161,6 +174,12 @@ export function GameProvider({ children }) {
       onSuccess: () => resetRoomStateRef.current(),
     });
   }
+  if (!savedRoomLeaveCoordinatorRef.current) {
+    savedRoomLeaveCoordinatorRef.current = createLeaveRoomCoordinator({
+      send: () => leaveRequestRef.current?.(resumeOfferRef.current?.code) || { error: "leave_unavailable", retryable: true },
+      onSuccess: () => resetRoomStateRef.current(),
+    });
+  }
 
   // Keep playersRef in sync for the realtime subscription's meaningful-change check.
   useEffect(() => {
@@ -185,6 +204,11 @@ export function GameProvider({ children }) {
   const toggleMute = useCallback(() => setMutedState((m) => { const next = !m; setSfxMuted(next); return next; }), []);
 
   const resetRoomState = useCallback(() => {
+    // Invalidate any roster read that began before the room was left. Without
+    // this, a late successful reconnect response can put an Android player
+    // straight back into a room that the server already removed them from.
+    savedRoomRecoveryAttemptRef.current += 1;
+    setResumeOfferState(null);
     clearActiveRoom();
     clearPendingRoomCode();
     activeRoomCodeRef.current = "";
@@ -210,7 +234,7 @@ export function GameProvider({ children }) {
     setRoomCode(""); setPendingRoomCodeState(""); setRoom(null); setIsHost(false); setPlayers([]);
     setYou({ nickname: "", photo: null, avatar: PRESET_AVATARS[0] });
     setLeftReason(null); setPhase("landing");
-  }, []);
+  }, [setResumeOfferState]);
   resetRoomStateRef.current = resetRoomState;
 
   // ---- lobby actions (unchanged) ----
@@ -338,28 +362,108 @@ export function GameProvider({ children }) {
     try { await base44.functions.invoke("room", { action: "kick", code: roomCode, sessionId, target_session: targetSession }); } catch {}
   }, [roomCode, sessionId]);
 
-  const requestLeaveRoom = useCallback(async () => {
+  const requestLeaveRoom = useCallback(async (requestedRoomCode = roomCode) => {
     // No active room is already a successful local leave.  A real room only
     // clears local state after the backend has removed this exact participant.
-    if (!roomCode) return { ok: true };
+    const code = normalizeRoomCode(requestedRoomCode);
+    if (!code) return { ok: true };
     try {
-      const res = await base44.functions.invoke("room", { action: "leave", code: roomCode, sessionId });
+      const res = await base44.functions.invoke("room", { action: "leave", code, sessionId });
       noteBackendBuild(res);
       const data = res?.data || {};
-      if (data.error) return { ...data, retryable: isRateLimited(data) };
+      if (data.error) {
+        console.warn("[UNREVIEWED] leave request failed", { error: data.error, retryable: isRateLimited(data) });
+        return { ...data, retryable: isRateLimited(data) };
+      }
       return data.ok === true ? { ok: true } : { error: "leave_failed", retryable: true };
     } catch (e) {
       const status = Number(e?.response?.status) || null;
-      return {
+      const failure = {
         error: e?.response?.data?.error || e?.message || "leave_failed",
         status,
         retryable: status === null || status === 429 || status >= 500,
       };
+      console.warn("[UNREVIEWED] leave request failed", { error: failure.error, status });
+      return failure;
     }
   }, [roomCode, sessionId]);
   leaveRequestRef.current = requestLeaveRoom;
 
   const leaveRoom = useCallback(() => leaveCoordinatorRef.current.leave(), []);
+  const leaveSavedRoom = useCallback(() => savedRoomLeaveCoordinatorRef.current.leave(), []);
+
+  const activateSavedRoom = useCallback((code, recovered) => {
+    const existing = recovered.room;
+    const mine = recovered.player;
+    const hostNow = existing.host_session === sessionId;
+
+    // This is the one explicit point where a persisted room becomes active
+    // again. Until the player chooses Resume, no heartbeat, timer, or route
+    // navigation is started for the saved room.
+    roomStatusRef.current = existing.status || "";
+    roomPhaseRef.current = existing.game_state?.phase || "";
+    activeRoomCodeRef.current = code;
+    rosterPrimedRoomRef.current = code;
+    joinedRosterRoomRef.current = code;
+    clearPendingRoomCode(); setPendingRoomCodeState("");
+    setActiveRoomCode(code);
+    setRoom(existing); setRoomCode(code); setMode(existing.mode); setLength(existing.length);
+    setIsHost(hostNow);
+    setYou({
+      nickname: mine.nickname,
+      photo: mine.photo_url || null,
+      avatar: PRESET_AVATARS.find((avatar) => avatar.id === mine.avatar_id) || PRESET_AVATARS[0],
+    });
+    setPlayers(recovered.players.map((player) => mapPlayer(player, sessionId, existing.host_session)));
+    seenSelfRef.current = true;
+    setLeftReason(null);
+    setResumeOfferState(null);
+    setPhase("lobby");
+    if (existing.status === "lobby") navigate("/lobby", { replace: true });
+  }, [navigate, sessionId, setResumeOfferState]);
+
+  const resumeSavedRoom = useCallback(async () => {
+    const saved = resumeOfferRef.current;
+    const code = normalizeRoomCode(saved?.code);
+    if (!code) return { error: "no_saved_room" };
+
+    const attempt = savedRoomRecoveryAttemptRef.current + 1;
+    savedRoomRecoveryAttemptRef.current = attempt;
+    setResumeOfferState({ ...saved, status: "checking", error: "" });
+    const isCurrent = () => isCurrentSavedRoomRecovery({
+      attempt,
+      currentAttempt: savedRoomRecoveryAttemptRef.current,
+      code,
+      activeRoomCode: activeRoomCodeRef.current,
+    });
+
+    try {
+      const data = await requestRoster(code, "resume-choice");
+      if (!isCurrent()) return { error: "resume_cancelled" };
+      const recovered = classifySavedRoomResponse(data, sessionId);
+      if (recovered.status === "stale") {
+        resetRoomState();
+        navigate("/", { replace: true });
+        return { error: recovered.reason, stale: true };
+      }
+      if (recovered.status !== "available") {
+        setResumeOfferState({ code, status: "unavailable", error: recovered.reason });
+        return { error: recovered.reason, retryable: true };
+      }
+      activateSavedRoom(code, recovered);
+      return { ok: true };
+    } catch (error) {
+      if (!isCurrent()) return { error: "resume_cancelled" };
+      const reason = error?.response?.data?.error || error?.message || "resume_unavailable";
+      if (["not_found", "closed", "not_in_room"].includes(reason)) {
+        resetRoomState();
+        navigate("/", { replace: true });
+        return { error: reason, stale: true };
+      }
+      setResumeOfferState({ code, status: "unavailable", error: reason });
+      return { error: reason, retryable: true };
+    }
+  }, [activateSavedRoom, navigate, requestRoster, resetRoomState, sessionId, setResumeOfferState]);
 
   const endRoom = useCallback(async () => {
     try { if (roomCode) await base44.functions.invoke("room", { action: "close", code: roomCode, sessionId }); } catch {}
@@ -848,6 +952,16 @@ export function GameProvider({ children }) {
     if (target && window.location.pathname !== target) navigate(target);
   }, [room?.status, room?.game_state?.phase, navigate]);
 
+  // Android WebViews can restore the last pathname (for example /write) after
+  // an APK update. A persisted room is only being checked at this point, not
+  // resumed, so put the player back at the menu before any old game screen can
+  // render as an active session.
+  useEffect(() => {
+    if (resumeOffer?.status === "checking" && !roomCode && window.location.pathname !== "/") {
+      navigate("/", { replace: true });
+    }
+  }, [navigate, resumeOffer?.status, roomCode]);
+
   // ---- coordinated deadline advancement ----
   // The server validates the phase/deadline. Each client calculates the same
   // owner/fallback order, so an active non-host can still move a room forward
@@ -886,7 +1000,7 @@ export function GameProvider({ children }) {
     if (leftReason && window.location.pathname !== "/lobby") navigate("/lobby");
   }, [leftReason, navigate]);
 
-  // ---- reconnect on load ----
+  // ---- offer reconnect on load ----
   // NOTE: cleanupRooms is NOT called from the client. It is a server-side
   // maintenance function that lists + deletes all rooms/players matching TTL
   // criteria. Calling it on every page load caused rate-limit storms and
@@ -900,51 +1014,46 @@ export function GameProvider({ children }) {
     resumeAttemptedRef.current = true;
     const code = getActiveRoomCode();
     if (!code) return;
-    const resumeActiveRoom = () => {
-      // A saved room originated from a successful join. On a transient
-      // reconnect failure, resume the normal active-room recovery path rather
-      // than sending the player through join again.
-      activeRoomCodeRef.current = code;
-      setRoomCode(code);
-      setPhase("lobby");
-    };
+    const attempt = savedRoomRecoveryAttemptRef.current + 1;
+    savedRoomRecoveryAttemptRef.current = attempt;
+    const isCurrent = () => isCurrentSavedRoomRecovery({
+      attempt,
+      currentAttempt: savedRoomRecoveryAttemptRef.current,
+      code,
+      activeRoomCode: activeRoomCodeRef.current,
+    });
     const invalidateSavedRoom = () => {
+      if (!isCurrent()) return;
       resetRoomState();
-      navigate("/create", { replace: true });
+      navigate("/", { replace: true });
     };
     (async () => {
       try {
         const data = await requestRoster(code, "reconnect");
-        if (isRateLimited(data)) { resumeActiveRoom(); return; }
-        // Clear only after an authoritative absence/membership result. A 500
-        // or transient SDK failure must not discard a valid active session.
-        if (["not_found", "closed", "not_in_room"].includes(data.error)) { invalidateSavedRoom(); return; }
-        if (data.error || !data.room) { resumeActiveRoom(); return; }
-        const existing = data.room;
-        const mine = (data.players || []).find((p) => p.session_id === sessionId);
-        if (!mine) { invalidateSavedRoom(); return; }
-        // An already-active room wins over any stale pre-join code left in
-        // storage from an interrupted Profile Setup flow.
-        clearPendingRoomCode(); setPendingRoomCodeState("");
-        setRoom(existing); setRoomCode(code); setMode(existing.mode); setLength(existing.length);
-        setIsHost(existing.host_session === sessionId);
-        setYou({
-          id: sessionId,
-          nickname: mine.nickname,
-          photo: mine.photo_url || null,
-          avatar: PRESET_AVATARS.find((a) => a.id === mine.avatar_id) || PRESET_AVATARS[0],
-          isHost: existing.host_session === sessionId,
-        });
-        seenSelfRef.current = true;
-        setPhase("lobby");
-        // centralized navigation effect will route to the correct game page
+        if (!isCurrent()) return;
+        const recovered = classifySavedRoomResponse(data, sessionId);
+        if (recovered.status === "stale") { invalidateSavedRoom(); return; }
+        if (recovered.status === "available") {
+          // An already-active room wins over any stale pre-join code left in
+          // storage from an interrupted Profile Setup flow, but it must wait
+          // for an explicit Resume Game choice before becoming active again.
+          clearPendingRoomCode(); setPendingRoomCodeState("");
+          setResumeOfferState({ code, status: "available", room: recovered.room, player: recovered.player, error: "" });
+        } else {
+          setResumeOfferState({ code, status: "unavailable", error: recovered.reason });
+        }
+        navigate("/", { replace: true });
       } catch (e) {
+        if (!isCurrent()) return;
         const error = e?.response?.data?.error;
         if (["not_found", "closed", "not_in_room"].includes(error)) invalidateSavedRoom();
-        else resumeActiveRoom();
+        else {
+          setResumeOfferState({ code, status: "unavailable", error: error || e?.message || "resume_unavailable" });
+          navigate("/", { replace: true });
+        }
       }
     })();
-  }, [sessionId, resetRoomState, navigate, requestRoster]);
+  }, [sessionId, resetRoomState, navigate, requestRoster, setResumeOfferState]);
 
   // ---- derived game state (sanitized: authors/ratings hidden until results) ----
   const rawGame = room?.game_state;
@@ -978,7 +1087,7 @@ export function GameProvider({ children }) {
   const value = {
     sessionId,
     mode, setMode, length, setLength, roomCode, pendingRoomCode, room, isHost,
-    you, setYou, players, leftReason, acknowledgeLeft,
+    you, setYou, players, leftReason, acknowledgeLeft, resumeOffer, resumeSavedRoom, leaveSavedRoom,
     phase, setPhase,
     // game state
     gamePhase, currentSubjectId, currentPrompt, answers, ratingIndex,

@@ -7,6 +7,7 @@ import Avatar from "@/components/Avatar";
 import Stamp from "@/components/Stamp";
 import Scribble from "@/components/Scribble";
 import { sfx } from "@/lib/sound";
+import { useGame } from "@/game/GameContext";
 
 // Review cards live in a dedicated side rail on desktop so they never
 // collide with the headline, PLAY button, copy or avatar strip.
@@ -26,7 +27,29 @@ const TONE_BG = {
 
 export default function Landing() {
   const navigate = useNavigate();
+  const { resumeOffer, resumeSavedRoom, leaveSavedRoom } = useGame();
+  const [resumeBusy, setResumeBusy] = React.useState(false);
+  const [resumeError, setResumeError] = React.useState("");
+  const resumeChecking = resumeOffer?.status === "checking";
   const play = () => { sfx.reveal(); navigate("/create"); };
+
+  const resume = async () => {
+    if (resumeBusy) return;
+    setResumeBusy(true); setResumeError("");
+    const result = await resumeSavedRoom();
+    setResumeBusy(false);
+    if (!result?.ok && result?.error !== "resume_cancelled") {
+      setResumeError(result?.stale ? "That room is no longer available." : "We couldn't reconnect yet. Check your connection and try again.");
+    }
+  };
+
+  const leaveSaved = async () => {
+    if (resumeBusy) return;
+    setResumeBusy(true); setResumeError("");
+    const result = await leaveSavedRoom();
+    setResumeBusy(false);
+    if (!result?.ok) setResumeError("We couldn't leave that room yet. You're still in it — please try again.");
+  };
 
   return (
     <div className="app-page app-page--landing relative mx-auto flex max-w-6xl flex-col px-4 pt-5 text-[hsl(var(--ink))] sm:px-5 sm:pt-8">
@@ -62,18 +85,55 @@ export default function Landing() {
             <p className="font-heading text-sm font-bold uppercase tracking-widest text-[hsl(var(--mode-adult))]">Your friends have opinions. Unfortunately.</p>
           </div>
 
-          <div className="mt-8 flex flex-col items-start gap-6 sm:flex-row sm:items-center">
-            <motion.button
-              onClick={play}
-              whileHover={{ scale: 1.04, rotate: -1 }} whileTap={{ scale: 0.97 }}
-              className="group inline-flex items-center gap-3 rounded-full border-4 border-[hsl(var(--ink))] bg-primary px-12 py-5 font-display text-3xl uppercase tracking-wide text-primary-foreground shadow-[0_7px_0_0_hsl(var(--ink))]"
-            >
-              Play <ArrowRight size={28} className="transition-transform group-hover:translate-x-1" />
-            </motion.button>
-            <div className="max-w-xs">
-              <p className="text-sm opacity-60">Write anonymous reviews. Rate the damage. Predict the winner.</p>
+          {resumeOffer ? (
+            <section className="mt-8 max-w-xl rounded-3xl border-4 border-[hsl(var(--ink))] bg-white p-5 shadow-[0_6px_0_0_hsl(var(--ink))] sm:p-6" aria-label="Saved game">
+              <p className="font-heading text-xs font-bold uppercase tracking-widest text-[hsl(var(--mode-adult))]">Saved game found</p>
+              <h2 className="mt-2 font-display text-3xl uppercase">
+                {resumeChecking ? "Checking your saved game…" : resumeOffer.status === "unavailable" ? "Reconnect to your game?" : "Resume your game?"}
+              </h2>
+              <p className="mt-2 text-sm leading-relaxed opacity-70">
+                {resumeChecking
+                  ? "Verifying that this device is still in the saved room."
+                  : resumeOffer.status === "unavailable"
+                  ? "We couldn't verify the saved room yet. You can retry safely, or leave it before starting something new."
+                  : `Room ${resumeOffer.code} is still ${resumeOffer.room?.status === "playing" ? "in progress" : "waiting in the lobby"}.`}
+              </p>
+              {resumeError && <p role="alert" className="mt-3 text-sm font-semibold text-[hsl(var(--mode-adult))]">{resumeError}</p>}
+              {!resumeChecking && (
+                <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+                  <button
+                    type="button"
+                    onClick={resume}
+                    disabled={resumeBusy}
+                    className="inline-flex flex-1 items-center justify-center gap-2 rounded-full border-4 border-[hsl(var(--ink))] bg-primary px-6 py-3.5 font-display text-xl uppercase text-primary-foreground shadow-[0_4px_0_0_hsl(var(--ink))] disabled:opacity-50"
+                  >
+                    {resumeBusy ? "Checking…" : resumeOffer.status === "unavailable" ? "Try Again" : "Resume Game"} <ArrowRight size={20} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={leaveSaved}
+                    disabled={resumeBusy}
+                    className="flex-1 rounded-full border-2 border-[hsl(var(--ink))] bg-white px-6 py-3.5 font-display text-xl uppercase disabled:opacity-50"
+                  >
+                    Leave Room
+                  </button>
+                </div>
+              )}
+            </section>
+          ) : (
+            <div className="mt-8 flex flex-col items-start gap-6 sm:flex-row sm:items-center">
+              <motion.button
+                onClick={play}
+                whileHover={{ scale: 1.04, rotate: -1 }} whileTap={{ scale: 0.97 }}
+                className="group inline-flex items-center gap-3 rounded-full border-4 border-[hsl(var(--ink))] bg-primary px-12 py-5 font-display text-3xl uppercase tracking-wide text-primary-foreground shadow-[0_7px_0_0_hsl(var(--ink))]"
+              >
+                Play <ArrowRight size={28} className="transition-transform group-hover:translate-x-1" />
+              </motion.button>
+              <div className="max-w-xs">
+                <p className="text-sm opacity-60">Write anonymous reviews. Rate the damage. Predict the winner.</p>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* photo cutouts row */}
           <div className="mt-10 flex flex-wrap items-end gap-3">

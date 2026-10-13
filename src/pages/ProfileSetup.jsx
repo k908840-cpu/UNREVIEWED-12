@@ -12,7 +12,7 @@ import { getActiveRoomCode } from "@/lib/session";
 export default function ProfileSetup() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { you, roomCode, pendingRoomCode, commitJoin } = useGame();
+  const { you, roomCode, pendingRoomCode, commitJoin, resumeOffer } = useGame();
   const joinRoomCode = location.state?.roomCode || pendingRoomCode || "";
   const savedActiveRoomCode = getActiveRoomCode();
   const [nickname, setNickname] = useState(you.nickname);
@@ -36,9 +36,11 @@ export default function ProfileSetup() {
     // an active room. It will either set roomCode and route to the lobby, or
     // clear the stale entry and route back to Create/Join.
     if (roomCode) { navigate("/lobby", { replace: true }); return; }
-    if (savedActiveRoomCode) return;
+    // A persisted active room must be resolved explicitly from the home screen
+    // before this device can join or create another one.
+    if (resumeOffer || savedActiveRoomCode) { navigate("/", { replace: true }); return; }
     if (joinRoomCode.length !== 4) navigate("/create", { replace: true, state: { roomSetupMissing: true } });
-  }, [roomCode, savedActiveRoomCode, joinRoomCode, navigate]);
+  }, [roomCode, savedActiveRoomCode, joinRoomCode, navigate, resumeOffer]);
 
   const handleFile = (file) => {
     if (!file) return;
