@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { Star, ArrowRight, Trophy, Medal, Target } from "lucide-react";
 import { useGame } from "@/game/GameContext";
@@ -25,7 +24,6 @@ function getPredictionLine(predictedTop, subject) {
 }
 
 export default function RoundResults() {
-  const navigate = useNavigate();
   const { roundResult, players, roundIndex, advance } = useGame();
   const [step, setStep] = useState(0);
 
@@ -52,7 +50,7 @@ export default function RoundResults() {
   }, [step, roundResult, n, totalSteps, ordered]);
 
   if (!roundResult) {
-    return <div className="grid min-h-screen place-items-center px-5 text-center text-[hsl(var(--ink))]">
+    return <div className="app-page grid place-items-center px-4 text-center text-[hsl(var(--ink))] sm:px-5">
       <button onClick={() => advance({ force: true, expectedPhase: "results", expectedRound: roundIndex })} className="rounded-full border-4 border-[hsl(var(--ink))] bg-primary px-6 py-3 font-display uppercase text-primary-foreground">Continue →</button>
     </div>;
   }
@@ -61,7 +59,7 @@ export default function RoundResults() {
   const predLine = getPredictionLine(roundResult.predictedTop, subject);
 
   return (
-    <div className="relative mx-auto flex min-h-screen max-w-3xl flex-col px-5 py-8 text-[hsl(var(--ink))]">
+    <div className="app-page relative mx-auto flex w-full max-w-3xl flex-col px-4 pt-5 text-[hsl(var(--ink))] sm:px-5 sm:pt-8">
       <AnimatePresence>
         {step === 0 && (
           <motion.div key="intro" exit={{ opacity: 0, scale: 1.1 }} className="absolute inset-0 grid place-items-center">
@@ -88,7 +86,7 @@ export default function RoundResults() {
 
       <AnimatePresence>
         {showPrediction && (
-          <motion.div key="pred" initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} className="flex flex-1 flex-col justify-center rounded-3xl border-4 border-[hsl(var(--ink))] bg-white p-8 text-center shadow-[0_6px_0_0_hsl(var(--ink))]">
+          <motion.div key="pred" initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} className="mx-auto w-full max-w-2xl rounded-3xl border-4 border-[hsl(var(--ink))] bg-white p-5 text-center shadow-[0_6px_0_0_hsl(var(--ink))] sm:p-8">
             {predLine && (
               <>
                 <div className="flex justify-center"><Stamp tone={roundResult.predictedTop ? "green" : "red"} rotate={-4}>{roundResult.predictedTop ? "Nailed it" : "Wrong call"}</Stamp></div>
@@ -109,7 +107,7 @@ export default function RoundResults() {
 
       <AnimatePresence>
         {step >= totalSteps && (
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="pb-4 text-center">
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mt-6 pb-2 text-center sm:pb-4">
             <button onClick={() => advance({ force: true, expectedPhase: "results", expectedRound: roundIndex })} className="inline-flex items-center gap-2 rounded-full border-4 border-[hsl(var(--ink))] bg-primary px-8 py-4 font-display text-2xl uppercase tracking-wide text-primary-foreground shadow-[0_6px_0_0_hsl(var(--ink))]">
               Leaderboard <ArrowRight size={22} />
             </button>
@@ -126,7 +124,7 @@ export default function RoundResults() {
 
 function RevealList({ ordered, step, players }) {
   return (
-    <div className="space-y-5">
+    <div className="space-y-4 sm:space-y-5">
       {ordered.map((item, i) => {
         const barStep = 1 + i * 2;
         const authorStep = barStep + 1;
@@ -149,7 +147,7 @@ function RevealList({ ordered, step, players }) {
           <motion.div
             key={item.id}
             initial={{ opacity: 0, y: 24, rotate: -1 }} animate={{ opacity: 1, y: 0, rotate: isTop ? 0 : -0.6 }}
-            className={cn("paper-grain relative overflow-visible rounded-3xl border-4 p-5 shadow-[0_6px_0_0_hsl(var(--ink))]", cardTone)}
+            className={cn("paper-grain relative overflow-visible rounded-3xl border-4 p-4 shadow-[0_6px_0_0_hsl(var(--ink))] sm:p-5", cardTone)}
           >
             <span className="pointer-events-none absolute -right-2 -top-6 select-none font-display text-7xl leading-none opacity-20">#{rank}</span>
 
@@ -166,7 +164,7 @@ function RevealList({ ordered, step, players }) {
               </div>
             )}
 
-            <p className="relative text-balance text-center text-xl font-semibold leading-snug sm:text-2xl">“{item.text}”</p>
+            <p className="relative text-balance text-center text-lg font-semibold leading-snug sm:text-2xl">“{item.text}”</p>
 
             <div className="relative mt-4"><RatingBar value={item.avg} delay={0.1} height={26} /></div>
 

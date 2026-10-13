@@ -21,7 +21,7 @@ export default function SettingsPanel({ open, onClose }) {
           initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }}
           transition={{ type: "spring", stiffness: 260, damping: 30 }}
           onClick={(e) => e.stopPropagation()}
-          className="paper-grain absolute right-0 top-0 flex h-full w-full max-w-md flex-col overflow-y-auto border-l-4 border-[hsl(var(--ink))] bg-cream p-6 text-[hsl(var(--cream-foreground))]"
+          className="app-drawer paper-grain absolute right-0 top-0 flex w-full max-w-md flex-col overflow-y-auto border-l-4 border-[hsl(var(--ink))] bg-cream px-6 text-[hsl(var(--cream-foreground))]"
         >
           <div className="flex items-start justify-between">
             <div>

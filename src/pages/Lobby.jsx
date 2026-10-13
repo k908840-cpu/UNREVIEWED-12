@@ -55,7 +55,7 @@ export default function Lobby() {
 
   if (leftReason) {
     return (
-      <div className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center px-5 text-center text-[hsl(var(--ink))]">
+      <div className="app-page mx-auto flex max-w-md flex-col items-center justify-center px-4 text-center text-[hsl(var(--ink))] sm:px-5">
         <Stamp tone="red" rotate={-6} press>{leftReason === "removed" ? "Removed" : "Room closed"}</Stamp>
         <h1 className="mt-5 font-display text-4xl uppercase">
           {leftReason === "removed" ? "The Host showed you the door." : "This room is over."}
@@ -77,11 +77,11 @@ export default function Lobby() {
   const slots = [...players, ...Array(Math.max(0, MAX_PLAYERS - players.length)).fill(null)];
 
   return (
-    <div className="relative mx-auto min-h-screen max-w-3xl px-5 py-10 text-[hsl(var(--ink))]">
-      <div className="paper-grain relative rounded-[1.5rem] border-4 border-[hsl(var(--ink))] bg-white p-6 text-center">
+    <div className="app-page relative mx-auto max-w-3xl px-4 pt-5 text-[hsl(var(--ink))] sm:px-5 sm:pt-10">
+      <div className="paper-grain relative rounded-[1.5rem] border-4 border-[hsl(var(--ink))] bg-white p-4 text-center sm:p-6">
         <div className="absolute -top-3 left-1/2 -translate-x-1/2"><Stamp tone="yellow" rotate={-3}>Room code</Stamp></div>
         <button onClick={copyCode} className="group mt-2 inline-flex items-center gap-3">
-          <span className="font-display text-5xl tracking-[0.2em] sm:text-6xl">{roomCode}</span>
+          <span className="font-display text-4xl tracking-[0.16em] sm:text-6xl">{roomCode}</span>
           <span className="grid h-9 w-9 place-items-center rounded-full border-2 border-[hsl(var(--ink))] transition group-hover:bg-primary group-hover:text-primary-foreground">
             {copied ? <Check size={16} /> : <Copy size={16} />}
           </span>
@@ -96,20 +96,20 @@ export default function Lobby() {
         <span className="rounded-full border-2 border-[hsl(var(--ink))] bg-white px-3 py-1.5 text-xs font-bold uppercase tracking-wider">{lengthLabel}</span>
       </div>
 
-      <section className="mt-8">
+      <section className="mt-6 sm:mt-8">
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2 font-heading text-sm font-bold uppercase tracking-widest opacity-70">
             <Users size={16} /> Players ({players.length}/{MAX_PLAYERS})
           </div>
           {isHost && <span className="flex items-center gap-1 text-xs font-bold uppercase tracking-wider opacity-60"><Crown size={13} className="text-primary" /> You're the Host</span>}
         </div>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
           {slots.map((p, i) => (
             <motion.div
               key={p?.sessionId || i}
               initial={{ opacity: 0, scale: 0.9, rotate: -1 }} animate={{ opacity: 1, scale: 1, rotate: i % 2 ? 1 : -1 }}
               transition={{ delay: i * 0.04 }}
-              className={cn("paper-grain relative flex items-center gap-3 rounded-2xl border-4 bg-white p-3", p && !p.connected ? "border-[hsl(var(--ink))]/40 opacity-60" : "border-[hsl(var(--ink))]")}
+              className={cn("paper-grain relative flex items-center gap-2 rounded-2xl border-4 bg-white p-2.5 sm:gap-3 sm:p-3", p && !p.connected ? "border-[hsl(var(--ink))]/40 opacity-60" : "border-[hsl(var(--ink))]")}
             >
               {p ? (
                 <>
@@ -144,7 +144,7 @@ export default function Lobby() {
 
       {error && <p className="mt-4 text-center text-sm font-semibold text-[hsl(var(--mode-adult))]">{error}</p>}
 
-      <div className="mt-10 text-center">
+      <div className="mt-7 text-center sm:mt-10">
         {isHost ? (
           <>
             <motion.button

@@ -29,7 +29,7 @@ export default function Landing() {
   const play = () => { sfx.reveal(); navigate("/create"); };
 
   return (
-    <div className="relative mx-auto flex min-h-screen max-w-6xl flex-col px-5 py-8 text-[hsl(var(--ink))]">
+    <div className="app-page app-page--landing relative mx-auto flex max-w-6xl flex-col px-4 pt-5 text-[hsl(var(--ink))] sm:px-5 sm:pt-8">
       {/* decorative shapes — always behind content */}
       <motion.span
         initial={{ rotate: -20, scale: 0 }} animate={{ rotate: -12, scale: 1 }} transition={{ type: "spring", stiffness: 120, damping: 12 }}

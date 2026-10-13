@@ -4,7 +4,6 @@ import { motion } from "framer-motion";
 import { ArrowRight, Crown } from "lucide-react";
 import { useGame } from "@/game/GameContext";
 import Avatar from "@/components/Avatar";
-import Stamp from "@/components/Stamp";
 import Scribble from "@/components/Scribble";
 import { cn } from "@/lib/utils";
 import { sfx } from "@/lib/sound";
@@ -52,19 +51,19 @@ export default function Leaderboard() {
   const onEnd = async () => { sfx.tap(); await endGame(); navigate("/"); };
 
   return (
-    <div className="relative mx-auto flex min-h-screen max-w-2xl flex-col px-5 py-8 text-[hsl(var(--ink))]">
+    <div className="app-page relative mx-auto flex w-full max-w-2xl flex-col px-4 pt-5 text-[hsl(var(--ink))] sm:px-5 sm:pt-8">
       <span className="pointer-events-none absolute -top-4 left-1/2 -z-0 -translate-x-1/2 select-none font-display text-[8rem] leading-none opacity-[0.05]">RANK</span>
 
       <div className="relative text-center">
         <p className="font-heading text-xs font-bold uppercase tracking-[0.3em] opacity-60">Standings</p>
-        <h1 className="text-display text-5xl sm:text-6xl">LEADERBOARD</h1>
+        <h1 className="text-display text-4xl sm:text-6xl">LEADERBOARD</h1>
         <div className="mt-1 flex justify-center"><Scribble color="yellow" width={200} /></div>
         <p className="mt-3 text-xs font-bold uppercase tracking-wider opacity-60">
           {length === "endless" ? `Round ${roundIndex + 1} · Endless` : `Round ${roundIndex + 1} of ${totalRounds}`}
         </p>
       </div>
 
-      <div className="relative mt-10 space-y-3">
+      <div className="relative mt-6 space-y-2.5 sm:mt-10 sm:space-y-3">
         {ranked.map((p, i) => {
           const place = i + 1;
           const isFirst = place === 1;
@@ -73,7 +72,7 @@ export default function Leaderboard() {
               key={p.id}
               layout
               initial={{ opacity: 0, x: -30 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.08, type: "spring", stiffness: 200, damping: 20 }}
-              className="paper-grain relative flex items-center gap-3 overflow-visible rounded-2xl border-4 border-[hsl(var(--ink))] bg-white p-3 shadow-[0_5px_0_0_hsl(var(--ink))]"
+              className="paper-grain relative flex items-center gap-2.5 overflow-visible rounded-2xl border-4 border-[hsl(var(--ink))] bg-white p-2.5 shadow-[0_5px_0_0_hsl(var(--ink))] sm:gap-3 sm:p-3"
             >
               <span className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-full font-display text-lg", RANK_LABEL[Math.min(place - 1, 3)])}>{place}</span>
 
@@ -106,13 +105,13 @@ export default function Leaderboard() {
         })}
       </div>
 
-      <div className="mt-auto pt-8 text-center">
+      <div className="mt-auto pt-6 text-center sm:pt-8">
         <p className="mb-4 font-heading text-sm font-bold uppercase tracking-[0.3em] opacity-60">Next Victim…</p>
         <motion.button
           onClick={next}
           disabled={advancing}
           whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
-          className="inline-flex items-center gap-2 rounded-full border-4 border-[hsl(var(--ink))] bg-primary px-9 py-4 font-display text-2xl uppercase tracking-wide text-primary-foreground shadow-[0_6px_0_0_hsl(var(--ink))]"
+          className="inline-flex items-center gap-2 rounded-full border-4 border-[hsl(var(--ink))] bg-primary px-6 py-3.5 font-display text-xl uppercase tracking-wide text-primary-foreground shadow-[0_6px_0_0_hsl(var(--ink))] sm:px-9 sm:py-4 sm:text-2xl"
         >
           {advancing ? "Starting…" : isLast ? "Final Results" : length === "endless" ? "Keep It Going" : "Next Round"} <ArrowRight size={22} />
         </motion.button>

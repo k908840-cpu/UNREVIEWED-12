@@ -40,14 +40,14 @@ export default function FinalResults() {
   const newRoom = async () => { sfx.tap(); await endRoom(); navigate("/"); };
 
   return (
-    <div className="relative mx-auto flex min-h-screen max-w-3xl flex-col px-5 py-8">
+    <div className="app-page relative mx-auto flex w-full max-w-3xl flex-col px-4 pt-5 sm:px-5 sm:pt-8">
       <div className="text-center">
         <p className="font-heading text-xs font-bold uppercase tracking-[0.3em] text-muted-foreground">Game Over</p>
         <h1 className="text-display text-5xl gold-text sm:text-7xl">FINAL RESULTS</h1>
         {stage >= 3 && first && <p className="mt-3 font-display text-xl uppercase text-primary">Winner: {first.nickname}</p>}
       </div>
 
-      <div className="mt-10 flex items-end justify-center gap-3 sm:gap-6">
+      <div className="mt-7 flex items-end justify-center gap-2 sm:mt-10 sm:gap-6">
         <PodiumColumn player={second} place={2} height="h-32" show={stage >= 2} delay={0} />
         <PodiumColumn player={first} place={1} height="h-44" show={stage >= 3} delay={0.1} big />
         <PodiumColumn player={third} place={3} height="h-24" show={stage >= 1} delay={0} />
@@ -55,7 +55,7 @@ export default function FinalResults() {
 
       <AnimatePresence>
         {stage >= 4 && (
-          <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} className="mt-10 space-y-3">
+          <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} className="mt-7 space-y-3 sm:mt-10">
             <h2 className="text-center font-heading text-sm font-bold uppercase tracking-[0.3em] text-muted-foreground">Awards</h2>
             {awards.map((a, i) => (
               <motion.div key={a.label} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.12 }} className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3.5">
@@ -76,7 +76,7 @@ export default function FinalResults() {
 
       <AnimatePresence>
         {stage >= 4 && (
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="mt-auto pt-8">
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="mt-auto pt-6 sm:pt-8">
             {isHost ? (
               <div>
                 <div className="grid gap-3 sm:grid-cols-3">

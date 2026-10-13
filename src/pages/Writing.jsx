@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Send, EyeOff, SkipForward, Star } from "lucide-react";
 import { useGame } from "@/game/GameContext";
@@ -48,7 +48,7 @@ export default function Writing() {
   const totalSubs = Math.min(submittedCount, eligible.length);
 
   return (
-    <div className="relative mx-auto flex min-h-screen max-w-3xl flex-col px-5 py-6 text-[hsl(var(--ink))]">
+    <div className="app-page relative mx-auto flex w-full max-w-3xl flex-col px-4 pt-5 text-[hsl(var(--ink))] sm:px-5 sm:pt-6">
       <span className="pointer-events-none absolute -top-4 left-1/2 -z-0 -translate-x-1/2 select-none font-display text-[8rem] leading-none opacity-[0.05]">REVIEW</span>
 
       <div className="relative flex items-center justify-between">

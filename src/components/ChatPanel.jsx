@@ -1,20 +1,18 @@
 import React, { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Send, Mic, MicOff, Volume2, VolumeX, Headphones } from "lucide-react";
+import { X, Send, Mic, MicOff, Headphones } from "lucide-react";
 import { useGame } from "@/game/GameContext";
 import Avatar from "./Avatar";
 import { cn } from "@/lib/utils";
 import { sfx } from "@/lib/sound";
 
 export default function ChatPanel({ open, onClose }) {
-  const { chat, addChat, players, muted, toggleMute, volume, setVolume } = useGame();
+  const { chat, addChat, players } = useGame();
   const [text, setText] = useState("");
   const [voiceMuted, setVoiceMuted] = useState(false);
   const scrollRef = useRef(null);
 
   const playerById = (id) => players.find((p) => p.id === id) || { nickname: "?", id };
-  const me = players.find((p) => p.isYou);
-
   useEffect(() => {
     if (open && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [chat, open]);
@@ -39,7 +37,7 @@ export default function ChatPanel({ open, onClose }) {
             onClick={onClose}
           />
           <motion.aside
-            className="fixed right-0 top-0 z-50 flex h-full w-full max-w-sm flex-col border-l border-border bg-card"
+            className="app-drawer app-drawer--with-footer fixed right-0 top-0 z-50 flex w-full max-w-sm flex-col border-l border-border bg-card"
             initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }}
             transition={{ type: "spring", stiffness: 320, damping: 34 }}
           >

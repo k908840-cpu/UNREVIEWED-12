@@ -52,7 +52,7 @@ export default function Prediction() {
 
   if (!isSubject) {
     return (
-      <div className="relative grid min-h-screen place-items-center px-5 text-center text-[hsl(var(--ink))]">
+      <div className="app-page relative grid place-items-center px-4 text-center text-[hsl(var(--ink))] sm:px-5">
         <div className="relative">
           <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="mx-auto grid h-24 w-24 place-items-center rounded-full border-4 border-[hsl(var(--ink))] bg-white">
             <Eye size={40} />
@@ -71,7 +71,7 @@ export default function Prediction() {
   }
 
   return (
-    <div className="relative mx-auto flex min-h-screen max-w-3xl flex-col px-5 py-8 text-[hsl(var(--ink))]">
+    <div className="app-page relative mx-auto flex w-full max-w-3xl flex-col px-4 pt-5 text-[hsl(var(--ink))] sm:px-5 sm:pt-8">
       <span className="pointer-events-none absolute -top-2 left-1/2 -z-0 -translate-x-1/2 select-none font-display text-[8rem] leading-none opacity-[0.05]">LOCKED</span>
 
       <div className="relative text-center">
@@ -79,7 +79,7 @@ export default function Prediction() {
           <div className="flex justify-center"><Stamp tone="yellow" rotate={-3}>Ratings locked</Stamp></div>
           {phaseDeadline && <Timer seconds={phaseDuration || PRED_SECONDS} deadline={phaseDeadline} size={48} />}
         </div>
-        <h1 className="mt-4 text-display text-4xl leading-none sm:text-6xl">THE RATINGS ARE LOCKED.</h1>
+        <h1 className="mt-4 text-display text-3xl leading-none sm:text-6xl">THE RATINGS ARE LOCKED.</h1>
         <div className="mt-1 flex items-center justify-center gap-3">
           <Avatar player={subject} size={44} ring />
           <p className="text-display text-2xl sm:text-3xl">{subject?.nickname},</p>
@@ -89,7 +89,7 @@ export default function Prediction() {
         <p className="mt-2 text-xs opacity-60">No scores, no authors — just the words. Pick the one you think got rated highest.</p>
       </div>
 
-      <div className="relative mt-6 flex-1 space-y-3">
+      <div className="relative mt-5 flex-1 space-y-2.5 sm:mt-6 sm:space-y-3">
         {answers.map((a, i) => {
           const isSel = selected === a.id;
           const tone = CARD_TONES[i % CARD_TONES.length];
@@ -100,7 +100,7 @@ export default function Prediction() {
               disabled={locked || submitting}
               onClick={() => { if (!locked && !submitting) { setSelected(a.id); setSubmissionError(""); sfx.starSelect(); } }}
               className={cn(
-                "flex w-full items-center gap-3 rounded-2xl border-4 p-4 text-left shadow-[0_5px_0_0_hsl(var(--ink))] transition",
+                "flex w-full items-center gap-2.5 rounded-2xl border-4 p-3 text-left shadow-[0_5px_0_0_hsl(var(--ink))] transition sm:gap-3 sm:p-4",
                 isSel ? "border-[hsl(var(--ink))] ring-4 ring-primary" : "border-[hsl(var(--ink))]",
                 locked && !isSel && "opacity-50",
                 tone
@@ -108,7 +108,7 @@ export default function Prediction() {
               style={{ transform: `rotate(${i % 2 ? 0.6 : -0.6}deg)` }}
             >
               <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border-2 border-[hsl(var(--ink))] bg-white font-display text-lg text-[hsl(var(--ink))]">{String.fromCharCode(65 + i)}</span>
-              <span className="flex-1 text-lg font-semibold">“{a.text}”</span>
+              <span className="flex-1 text-base font-semibold sm:text-lg">“{a.text}”</span>
               <span className={cn("grid h-8 w-8 place-items-center rounded-full border-2 transition", isSel ? "border-[hsl(var(--ink))] bg-white text-[hsl(var(--ink))]" : "border-white/40 opacity-50")}>
                 <Check size={16} />
               </span>

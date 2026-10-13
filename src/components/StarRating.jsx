@@ -7,7 +7,6 @@ import { sfx } from "@/lib/sound";
 export default function StarRating({ value = 0, onChange, size = 40, readonly = false, accent = "primary", className }) {
   const [hover, setHover] = useState(0);
   const shown = hover || value;
-
   const color = accent === "mode" ? "text-[hsl(var(--accent-mode))]" : "text-primary";
 
   return (
@@ -27,8 +26,8 @@ export default function StarRating({ value = 0, onChange, size = 40, readonly = 
             aria-label={`${n} star${n > 1 ? "s" : ""}`}
           >
             <Star
-              size={size}
               strokeWidth={active ? 0 : 2}
+              size={size}
               className={cn("transition-colors", active ? color : "text-muted-foreground/40", active && "drop-shadow-[0_0_8px_hsl(var(--primary)/0.45)]")}
               fill={active ? "currentColor" : "none"}
             />

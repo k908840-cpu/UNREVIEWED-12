@@ -39,7 +39,7 @@ export default function QuitGameDialog({ open, onOpenChange }) {
 
   return (
     <AlertDialog open={open} onOpenChange={close}>
-      <AlertDialogContent className="paper-grain w-[calc(100%-2.5rem)] rounded-3xl border-4 border-[hsl(var(--ink))] bg-cream p-6 text-[hsl(var(--cream-foreground))] shadow-[0_8px_0_0_hsl(var(--ink))] sm:max-w-md">
+      <AlertDialogContent className="paper-grain max-h-[calc(100dvh-2rem)] w-[calc(100%-2.5rem)] overflow-y-auto rounded-3xl border-4 border-[hsl(var(--ink))] bg-cream p-6 text-[hsl(var(--cream-foreground))] shadow-[0_8px_0_0_hsl(var(--ink))] sm:max-w-md">
         <AlertDialogHeader className="text-left">
           <div className="grid h-12 w-12 place-items-center rounded-2xl bg-[hsl(var(--mode-adult))] text-cream">
             <LogOut size={22} />

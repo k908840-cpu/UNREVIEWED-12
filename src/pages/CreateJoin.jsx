@@ -45,7 +45,7 @@ export default function CreateJoin() {
   };
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center px-5 py-10 text-[hsl(var(--ink))]">
+    <div className="app-page mx-auto flex max-w-3xl flex-col justify-center px-4 pt-6 text-[hsl(var(--ink))] sm:px-5 sm:pt-10">
       <button onClick={() => navigate("/")} className="mb-6 inline-flex items-center gap-1.5 text-sm text-[hsl(var(--ink))]/60 hover:text-[hsl(var(--ink))]">
         <ArrowLeft size={16} /> Back
       </button>

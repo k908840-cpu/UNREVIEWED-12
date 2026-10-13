@@ -61,12 +61,14 @@
 
   html, body, #root {
     height: 100%;
+    min-height: 100dvh;
   }
 
   body {
     @apply bg-background text-foreground font-body antialiased;
     -webkit-tap-highlight-color: transparent;
-    overscroll-behavior: none;
+    overflow-x: clip;
+    overscroll-behavior-x: none;
   }
 
   ::selection {
@@ -144,7 +146,69 @@
     mix-blend-mode: screen;
   }
 
-  .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+  .safe-bottom { padding-bottom: max(0.75rem, calc(0.75rem + env(safe-area-inset-bottom, 0px))); }
+}
+
+/*
+ * Mobile app framing. `100vh` can include Android browser chrome, while the
+ * native WebView may expose status/navigation insets. Pages opt into this
+ * class instead of assuming that a full viewport exists below the top bar.
+ */
+.app-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: clip;
+}
+
+.app-header {
+  padding-top: max(0.5rem, env(safe-area-inset-top, 0px));
+  padding-left: max(0.75rem, env(safe-area-inset-left, 0px));
+  padding-right: max(0.75rem, env(safe-area-inset-right, 0px));
+}
+
+.app-page {
+  min-height: calc(100vh - var(--app-header-height, 0px));
+  min-height: calc(100dvh - var(--app-header-height, 0px));
+  padding-bottom: max(1.25rem, calc(1rem + env(safe-area-inset-bottom, 0px)));
+}
+
+.app-page--landing {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.app-drawer {
+  height: 100vh;
+  height: 100dvh;
+  padding-top: max(0.75rem, env(safe-area-inset-top, 0px));
+  padding-bottom: max(0.75rem, calc(0.75rem + env(safe-area-inset-bottom, 0px)));
+}
+
+.app-drawer--with-footer {
+  padding-bottom: 0;
+}
+
+.safe-modal-inset {
+  padding: max(1rem, env(safe-area-inset-top, 0px)) max(1rem, env(safe-area-inset-right, 0px)) max(1rem, env(safe-area-inset-bottom, 0px)) max(1rem, env(safe-area-inset-left, 0px));
+}
+
+.safe-action-bottom {
+  bottom: max(1.25rem, calc(1rem + env(safe-area-inset-bottom, 0px)));
+}
+
+/* The five 72px rating targets need to remain inside a 320px viewport. */
+@media (max-width: 639px) {
+  .rating-stars > button,
+  .rating-stars > button > svg {
+    width: clamp(48px, 15.5vw, 72px) !important;
+    height: clamp(48px, 15.5vw, 72px) !important;
+  }
+}
+
+@media (min-width: 640px) {
+  .app-page {
+    padding-bottom: 2rem;
+  }
 }
 
 /* keyframes */

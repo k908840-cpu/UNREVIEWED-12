@@ -39,7 +39,7 @@ export default function SubjectReveal() {
   };
 
   return (
-    <div className="relative grid min-h-screen place-items-center overflow-hidden px-5 py-10">
+    <div className="app-page relative grid place-items-center overflow-x-clip px-4 pt-5 sm:px-5 sm:pt-10">
       <span className="pointer-events-none absolute -left-10 top-10 select-none font-display text-[10rem] leading-none text-primary/[0.06]">★</span>
       <span className="pointer-events-none absolute -right-8 bottom-10 select-none font-display text-[12rem] leading-none text-[hsl(var(--mode-adult))]/[0.06]">5★</span>
       <span className="pointer-events-none absolute right-1/4 top-6 select-none font-display text-[6rem] leading-none text-[hsl(var(--mode-family))]/[0.05]">REVIEW</span>
@@ -113,7 +113,7 @@ export default function SubjectReveal() {
         disabled={gamePhase !== "reveal"}
         initial={{ opacity: 0 }} animate={{ opacity: stage >= 2 ? 1 : 0 }}
         transition={{ delay: 0.6 }}
-        className="absolute bottom-8 left-1/2 -translate-x-1/2 rounded-full border-2 border-[hsl(var(--ink))] bg-primary px-6 py-3 font-display text-lg uppercase tracking-wide text-primary-foreground shadow-[0_5px_0_0_hsl(var(--ink))] hover:scale-105"
+        className="safe-action-bottom absolute left-1/2 -translate-x-1/2 rounded-full border-2 border-[hsl(var(--ink))] bg-primary px-6 py-3 font-display text-lg uppercase tracking-wide text-primary-foreground shadow-[0_5px_0_0_hsl(var(--ink))] hover:scale-105"
       >
         Continue →
       </motion.button>

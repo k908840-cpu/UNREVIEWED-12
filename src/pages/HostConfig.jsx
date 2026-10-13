@@ -49,7 +49,7 @@ export default function HostConfig() {
   };
 
   return (
-    <div className="mx-auto max-w-4xl px-5 py-8">
+    <div className="app-page mx-auto max-w-4xl px-4 pt-5 sm:px-5 sm:pt-8">
       <button onClick={() => navigate("/create")} className="mb-5 inline-flex items-center gap-1.5 text-sm text-[hsl(var(--ink))]/60 hover:text-[hsl(var(--ink))]">
         <ArrowLeft size={16} /> Back
       </button>
@@ -113,10 +113,10 @@ export default function HostConfig() {
       {/* adult warning modal */}
       <AnimatePresence>
         {showAdultWarning && (
-          <motion.div className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+          <motion.div className="safe-modal-inset fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/80" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             <motion.div
               initial={{ scale: 0.9, y: 20, rotate: -2 }} animate={{ scale: 1, y: 0, rotate: 0 }} exit={{ scale: 0.9, y: 20 }}
-              className="paper-grain relative w-full max-w-md rounded-3xl border-4 border-[hsl(var(--mode-adult))] bg-cream p-7 text-[hsl(var(--cream-foreground))]"
+              className="paper-grain relative max-h-full w-full max-w-md overflow-y-auto rounded-3xl border-4 border-[hsl(var(--mode-adult))] bg-cream p-5 text-[hsl(var(--cream-foreground))] sm:p-7"
             >
               <div className="absolute -top-3 left-0 right-0 h-3 hazard-tape" />
               <div className="mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-[hsl(var(--mode-adult))] text-white"><AlertTriangle size={28} /></div>

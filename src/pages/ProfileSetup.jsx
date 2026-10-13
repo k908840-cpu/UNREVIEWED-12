@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, Upload, Camera, Check } from "lucide-react";
 import { useGame } from "@/game/GameContext";
 import { PRESET_AVATARS } from "@/game/mockData";
@@ -84,7 +83,7 @@ export default function ProfileSetup() {
   };
 
   return (
-    <div className="mx-auto max-w-2xl px-5 py-10 text-[hsl(var(--ink))]">
+    <div className="app-page mx-auto max-w-2xl px-4 pt-5 text-[hsl(var(--ink))] sm:px-5 sm:pt-10">
       <button onClick={() => navigate(-1)} className="mb-6 inline-flex items-center gap-1.5 text-sm text-[hsl(var(--ink))]/60 hover:text-[hsl(var(--ink))]">
         <ArrowLeft size={16} /> Back
       </button>

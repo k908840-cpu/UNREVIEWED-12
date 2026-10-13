@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React from "react";
 import { motion } from "framer-motion";
 import { Eye, SkipForward, Lock } from "lucide-react";
 import { useGame } from "@/game/GameContext";
@@ -34,11 +34,11 @@ export default function Rating() {
   const onExpire = () => advance();
 
   if (!current) {
-    return <div className="grid min-h-screen place-items-center text-[hsl(var(--ink))]"><button onClick={onExpire} className="rounded-full border-4 border-[hsl(var(--ink))] bg-primary px-6 py-3 font-display uppercase text-primary-foreground">Continue →</button></div>;
+    return <div className="app-page grid place-items-center text-[hsl(var(--ink))]"><button onClick={onExpire} className="rounded-full border-4 border-[hsl(var(--ink))] bg-primary px-6 py-3 font-display uppercase text-primary-foreground">Continue →</button></div>;
   }
 
   return (
-    <div className="relative mx-auto flex min-h-screen max-w-3xl flex-col px-5 py-6 text-[hsl(var(--ink))]">
+    <div className="app-page relative mx-auto flex w-full max-w-3xl flex-col px-4 pt-5 text-[hsl(var(--ink))] sm:px-5 sm:pt-6">
       <div className="flex items-center justify-center gap-1.5">
         {answers.map((_, i) => (
           <span key={i} className={cn("h-2 rounded-full transition-all", i === ratingIndex ? "w-8 bg-primary" : i < ratingIndex ? "w-4 bg-primary/40" : "w-4 bg-[hsl(var(--ink))]/15")} />
@@ -68,7 +68,7 @@ export default function Rating() {
       {youEligible ? (
         <div className="mt-7 flex flex-col items-center">
           <p className="mb-4 font-heading text-sm font-bold uppercase tracking-widest opacity-60">Rate this answer</p>
-          <StarRating value={myRating} onChange={onUserRate} size={72} />
+          <StarRating value={myRating} onChange={onUserRate} size={72} className="rating-stars" />
           <RatedPill done={ratedCount} total={eligibleCount} />
           <p className="mt-4 text-center text-sm opacity-60">{myRating ? "Locked in. Waiting on the others…" : "Tap a star. Don't overthink it."}</p>
         </div>

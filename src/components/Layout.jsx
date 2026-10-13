@@ -107,8 +107,8 @@ export default function Layout() {
 
   return (
     <div
-      className={cn("relative min-h-screen overflow-hidden", showtime ? "bg-background text-foreground" : "bg-cream text-[hsl(var(--cream-foreground))]")}
-      style={{ "--accent": accent }}
+      className={cn("app-shell relative flex flex-col", showtime ? "bg-background text-foreground" : "bg-cream text-[hsl(var(--cream-foreground))]")}
+      style={{ "--accent": accent, "--app-header-height": isLanding ? "0px" : "3.75rem" }}
       onPointerDownCapture={unlockAudioFromInteraction}
       onClickCapture={unlockAudioFromInteraction}
       onKeyDownCapture={unlockAudioFromInteraction}
@@ -118,12 +118,12 @@ export default function Layout() {
 
       {/* top bar */}
       {!isLanding && (
-        <header className="sticky top-0 z-30 flex items-center justify-between border-b-2 border-[hsl(var(--ink))] bg-background px-4 py-2.5">
-          <button onClick={goHome} className="flex items-center gap-2" aria-label={roomCode ? "Leave game or stay in game" : "Go to home"}>
+        <header className="app-header sticky top-0 z-30 flex shrink-0 items-center justify-between border-b-2 border-[hsl(var(--ink))] bg-background py-2 sm:px-4 sm:py-2.5">
+          <button onClick={goHome} className="flex items-center gap-1.5 sm:gap-2" aria-label={roomCode ? "Leave game or stay in game" : "Go to home"}>
             <span className="grid h-8 w-8 place-items-center rounded-lg bg-primary text-primary-foreground"><Star size={18} fill="currentColor" /></span>
-            <span className="font-display text-xl leading-none tracking-wide">UNREVIEWED</span>
+            <span className="hidden font-display text-xl leading-none tracking-wide min-[360px]:inline">UNREVIEWED</span>
           </button>
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2">
             {roomCode && (
               <div className="hidden items-center gap-1.5 rounded-full border border-border bg-card/60 px-3 py-1 sm:flex">
                 <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Room</span>
@@ -131,23 +131,23 @@ export default function Layout() {
               </div>
             )}
             {roundLabel && (
-              <span className="rounded-full border border-border bg-card/60 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-foreground">
+              <span className="hidden rounded-full border border-border bg-card/60 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-foreground md:inline-flex">
                 {roundLabel}
               </span>
             )}
-            <span className={cn("rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider", mode === "adult" ? "bg-[hsl(var(--mode-adult))]/15 text-[hsl(var(--mode-adult))]" : "bg-[hsl(var(--mode-family))]/15 text-[hsl(var(--mode-family))]")}>
+            <span className={cn("hidden rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider min-[390px]:inline-flex", mode === "adult" ? "bg-[hsl(var(--mode-adult))]/15 text-[hsl(var(--mode-adult))]" : "bg-[hsl(var(--mode-family))]/15 text-[hsl(var(--mode-family))]")}>
               {mode === "adult" ? "18+ Adults Only" : "Family"}
             </span>
             <VolumeControl compact />
             {roomCode && (
-              <button onClick={() => setQuitOpen(true)} className="grid h-10 w-10 place-items-center rounded-full border border-border bg-card/60 text-foreground transition hover:border-[hsl(var(--mode-adult))] hover:text-[hsl(var(--mode-adult))]" aria-label="Leave game" title="Leave game">
+              <button onClick={() => setQuitOpen(true)} className="grid h-9 w-9 place-items-center rounded-full border border-border bg-card/60 text-foreground transition hover:border-[hsl(var(--mode-adult))] hover:text-[hsl(var(--mode-adult))] sm:h-10 sm:w-10" aria-label="Leave game" title="Leave game">
                 <LogOut size={18} />
               </button>
             )}
-            <button onClick={() => { setSettingsOpen(true); unlockAudio(); }} className="grid h-10 w-10 place-items-center rounded-full border border-border bg-card/60 text-foreground transition hover:border-primary hover:text-primary" aria-label="Open settings">
+            <button onClick={() => { setSettingsOpen(true); unlockAudio(); }} className="grid h-9 w-9 place-items-center rounded-full border border-border bg-card/60 text-foreground transition hover:border-primary hover:text-primary sm:h-10 sm:w-10" aria-label="Open settings">
               <SettingsIcon size={18} />
             </button>
-            <button onClick={() => setChatOpen(true)} className="relative grid h-10 w-10 place-items-center rounded-full border border-border bg-card/60 text-foreground transition hover:border-primary hover:text-primary" aria-label="Open chat">
+            <button onClick={() => setChatOpen(true)} className="relative grid h-9 w-9 place-items-center rounded-full border border-border bg-card/60 text-foreground transition hover:border-primary hover:text-primary sm:h-10 sm:w-10" aria-label="Open chat">
               <MessageCircle size={18} />
             </button>
           </div>
@@ -163,7 +163,7 @@ export default function Layout() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-            className="relative"
+            className="relative flex min-h-0 flex-1 flex-col"
           >
             {displayedRoute.outlet}
           </motion.main>
