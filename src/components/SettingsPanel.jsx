@@ -46,6 +46,30 @@ export default function SettingsPanel({ open, onClose }) {
               on={s.reducedMotion} onChange={(v) => updateSettings({ reducedMotion: v })} />
           </div>
 
+          <section className="mt-7 rounded-2xl border-2 border-[hsl(var(--ink))] bg-white/70 p-4" aria-labelledby="music-credits-heading">
+            <h3 id="music-credits-heading" className="font-heading text-sm font-bold uppercase tracking-wide">Music credits</h3>
+            <p className="mt-2 text-xs leading-relaxed opacity-75">
+              “Local Forecast – Slower” by Kevin MacLeod (incompetech.com)
+            </p>
+            <a
+              href="https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1300011"
+              target="_blank"
+              rel="noreferrer"
+              className="mt-1 inline-block text-xs font-bold text-primary underline underline-offset-2"
+            >
+              Source: incompetech.com
+            </a>
+            <span className="mx-1 text-xs opacity-60">·</span>
+            <a
+              href="https://creativecommons.org/licenses/by/4.0/"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-block text-xs font-bold text-primary underline underline-offset-2"
+            >
+              Licensed under CC BY 4.0
+            </a>
+          </section>
+
           <div className="mt-auto pt-8">
             <p className="text-center text-[11px] uppercase tracking-widest opacity-50">Saved on this device</p>
           </div>

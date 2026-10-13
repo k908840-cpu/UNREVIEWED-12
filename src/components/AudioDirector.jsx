@@ -2,23 +2,6 @@ import { useEffect } from "react";
 import { useLocation } from "react-router-dom";
 import { music } from "@/lib/sound";
 
-// Maps the current screen to a musical intensity. Only switches when the
-// track actually changes, so loops don't restart on every minor navigation.
-const ROUTE_TRACK = {
-  "/": "lobby",
-  "/create": "lobby",
-  "/config": "lobby",
-  "/profile": "lobby",
-  "/lobby": "lobby",
-  "/leaderboard": "lobby",
-  "/reveal": "prediction",
-  "/write": "writing",
-  "/rate": "rating",
-  "/predict": "prediction",
-  "/results": "results",
-  "/final": "lobby",
-};
-
 export default function AudioDirector() {
   const location = useLocation();
 
@@ -43,9 +26,9 @@ export default function AudioDirector() {
   }, []);
 
   useEffect(() => {
-    const track = ROUTE_TRACK[location.pathname] || "lobby";
-    music.play(track);
-    if (location.pathname === "/final") music.sting("winner");
+    // The same licensed loop runs continuously across room and game routes;
+    // route changes must never create or restart another audio element.
+    void music.play();
   }, [location.pathname]);
 
   return null;

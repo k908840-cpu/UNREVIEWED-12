@@ -1,8 +1,11 @@
-// UNREVIEWED audio engine — original Web Audio synth (no asset files).
-// The loops and effects are generated locally so they can ship in the Android
-// app without downloading third-party audio. Keep the public API stable when
-// replacing a synth voice with a licensed sample in the future.
+// UNREVIEWED audio engine — bundled licensed music plus original Web Audio SFX.
+// The background track is a local asset; effects stay procedural so gameplay
+// feedback does not need downloaded samples.
 import { useEffect, useState } from "react";
+
+// Vite fingerprints this bundled URL for the web build; Node can also resolve
+// it as a file URL for the lightweight audio regressions.
+const localForecastSlower = new URL("../assets/audio/local-forecast-slower.mp3", import.meta.url).href;
 
 const STORAGE_KEY = "unreviewed:settings:v2";
 
@@ -71,6 +74,10 @@ let _masterMuted = false, _masterVolume = 0.85;
 let audioUnlocked = false;
 let appIsForeground = true;
 let removeUnlockListeners = null;
+let musicElement = null;
+let musicStartPromise = null;
+let musicRequestVersion = 0;
+let backgroundMusicRequested = false;
 
 function createContext() {
   if (typeof window === "undefined") return null;
@@ -96,6 +103,58 @@ function canPlay(channel) {
   );
 }
 
+function shouldPlayBackgroundMusic() {
+  return !!(
+    audioUnlocked
+    && appIsForeground
+    && backgroundMusicRequested
+    && settings.music.on
+    && !_masterMuted
+    && effective("music") > 0
+  );
+}
+
+function getMusicElement() {
+  if (typeof window === "undefined" || !window.Audio) return null;
+  if (!musicElement) {
+    musicElement = new window.Audio(localForecastSlower);
+    musicElement.loop = true;
+    musicElement.preload = "auto";
+  }
+  musicElement.volume = effective("music");
+  return musicElement;
+}
+
+function pauseBackgroundMusic() {
+  musicRequestVersion += 1;
+  musicElement?.pause();
+}
+
+function syncBackgroundMusic() {
+  if (!shouldPlayBackgroundMusic()) {
+    pauseBackgroundMusic();
+    return Promise.resolve();
+  }
+
+  const element = getMusicElement();
+  if (!element || !element.paused) return Promise.resolve();
+  if (musicStartPromise) return musicStartPromise.then(() => syncBackgroundMusic());
+  const requestVersion = ++musicRequestVersion;
+  const playResult = element.play();
+  const startPromise = Promise.resolve(playResult)
+    .catch(() => undefined)
+    .then(() => {
+      // A muted, backgrounded, or stopped request that resolved late must not
+      // leave a second copy of the track playing.
+      if (requestVersion !== musicRequestVersion || !shouldPlayBackgroundMusic()) element.pause();
+    });
+  musicStartPromise = startPromise;
+  return startPromise.finally(() => {
+    if (musicStartPromise === startPromise) musicStartPromise = null;
+    if (shouldPlayBackgroundMusic() && element.paused) void syncBackgroundMusic();
+  });
+}
+
 function resumeContext() {
   if (!audioUnlocked) return Promise.resolve(null);
   const ac = createContext();
@@ -115,17 +174,15 @@ function effective(channel) {
   return Math.max(0, Math.min(1, c.volume * _masterVolume * headroom));
 }
 function applyAudioSettings() {
-  if (!ctx) return;
+  if (!ctx) {
+    syncBackgroundMusic();
+    return;
+  }
   const now = ctx.currentTime;
   musicGain.gain.setTargetAtTime(effective("music"), now, 0.08);
   sfxGain.gain.setTargetAtTime(effective("sfx"), now, 0.04);
   voiceGain.gain.setTargetAtTime(effective("voice"), now, 0.04);
-  // A pending route-change crossfade must never restore an old volume after a
-  // player changes a setting or mutes the game.
-  if (musicTransitionTimer) clearTimeout(musicTransitionTimer);
-  musicTransitionTimer = null;
-  if (canPlay("music") && currentTrack) startScheduler();
-  else stopScheduler();
+  syncBackgroundMusic();
 }
 
 // legacy master mute/volume (kept for the quick VolumeControl in the top bar)
@@ -165,163 +222,33 @@ function sNoise(dur = 0.2, gain = 0.2, when = 0, hp = false) {
   src.start(t0);
 }
 
-// music voices -> musicGain
-function mTone(freq, dur, type, gain, when) {
-  if (!canPlay("music")) return;
-  const ac = ctx; if (!ac) return;
-  const t0 = ac.currentTime + when;
-  const osc = ac.createOscillator(), g = ac.createGain();
-  osc.type = type; osc.frequency.setValueAtTime(freq, t0);
-  g.gain.setValueAtTime(0.0001, t0);
-  g.gain.exponentialRampToValueAtTime(gain, t0 + 0.02);
-  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-  osc.connect(g).connect(musicGain);
-  osc.start(t0); osc.stop(t0 + dur + 0.05);
-}
-// ---- music patterns (replaceable temporary loops) ----
-const N = { C2:65.41, D2:73.42, E2:82.41, F2:87.31, G2:98, A2:110, B2:123.47,
-  C3:130.81, D3:146.83, E3:164.81, F3:174.61, G3:196, A3:220, B3:246.94,
-  C4:261.63, D4:293.66, E4:329.63, F4:349.23, G4:392, A4:440, B4:493.88,
-  C5:523.25, D5:587.33, E5:659.25, G5:783.99 };
-
-const TRACKS = {
-  lobby: {
-    bpm: 104, bassType: "triangle", stabType: "sine",
-    bass: [N.C2,null,N.C2,null, N.G2,null,N.G2,null, N.A2,null,N.A2,null, N.F2,null,N.G2,null],
-    stab: [null,null,null,null, [N.C4,N.E4,N.G4],null,null,null, null,null,null,null, [N.F4,N.A4,N.C5],null,null,null],
-    hat: [0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1],
-  },
-  writing: {
-    bpm: 112, bassType: "sine", stabType: "triangle",
-    bass: [N.C2,null,null,null, N.G2,null,null,null, N.A2,null,null,null, N.F2,null,null,null],
-    stab: [N.C4,null,N.E4,null,N.G4,null,N.A4,null, N.C5,null,N.A4,null,N.G4,null,N.E4,null],
-    hat: [0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0],
-  },
-  rating: {
-    bpm: 120, bassType: "sawtooth", stabType: "sine",
-    bass: [N.A2,null,N.A2,null, N.F2,null,N.F2,null, N.G2,null,N.G2,null, N.E2,null,N.E2,null],
-    stab: [null,null,[N.A3,N.C4,N.E4],null, null,null,null,null, null,null,[N.G3,N.B3,N.D4],null, null,null,null,null],
-    hat: [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0],
-  },
-  prediction: {
-    bpm: 84, bassType: "sine", stabType: "sine",
-    bass: [N.A2,null,null,null, N.A2,null,null,null, N.G2,null,null,null, N.F2,null,null,null],
-    stab: [null,null,null,null, null,null,null,null, [N.G3,N.C4],null,null,null, null,null,null,null],
-    hat: [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
-  },
-  results: {
-    bpm: 120, bassType: "triangle", stabType: "triangle",
-    bass: [N.C2,null,N.C2,null, N.D2,null,N.D2,null, N.E2,null,N.E2,null, N.G2,null,N.G2,null],
-    stab: [[N.C4,N.E4,N.G4],null,null,null, [N.D4,N.F4,N.A4],null,null,null, [N.E4,N.G4,N.B4],null,null,null, [N.G4,N.B4,N.D5],null,null,null],
-    hat: [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-  },
-};
-
-let currentTrack = null;
-let schedulerId = null;
-let step = 0;
-let nextNoteTime = 0;
-
-function playStep(track, s, t) {
-  const b = track.bass[s];
-  if (b) mTone(b, 0.22, track.bassType, 0.16, t - ctx.currentTime);
-  const stab = track.stab[s];
-  if (stab) (Array.isArray(stab) ? stab : [stab]).forEach((f) => mTone(f, 0.16, track.stabType, 0.07, t - ctx.currentTime));
-  // A very soft high tick gives the procedural loop a party-game pulse
-  // without adding a repetitive, attention-grabbing drum sample.
-  if (track.hat[s]) mTone(2200, 0.035, "square", 0.018, t - ctx.currentTime);
-}
-
-function startScheduler() {
-  if (schedulerId) return;
-  if (!canPlay("music")) return;
-  const ac = ctx; if (!ac) return;
-  nextNoteTime = ac.currentTime + 0.08;
-  step = 0;
-  schedulerId = setInterval(() => {
-    if (!ctx || !currentTrack) return;
-    const spb = 60 / currentTrack.bpm / 4;
-    while (nextNoteTime < ctx.currentTime + 0.15) {
-      playStep(currentTrack, step, nextNoteTime);
-      step = (step + 1) % 16;
-      nextNoteTime += spb;
-    }
-  }, 40);
-}
-function stopScheduler() {
-  if (schedulerId) { clearInterval(schedulerId); schedulerId = null; }
-}
-
-function rampTo(node, target, time = 0.3) {
-  if (!ctx) return;
-  const now = ctx.currentTime;
-  node.gain.cancelScheduledValues(now);
-  node.gain.setValueAtTime(Math.max(0.0001, node.gain.value), now);
-  node.gain.linearRampToValueAtTime(Math.max(0.0001, target), now + time);
-}
-
-let musicTransitionTimer = null;
-function crossfadeMusic(target) {
-  if (!ctx || !musicGain) return;
-  if (musicTransitionTimer) clearTimeout(musicTransitionTimer);
-  rampTo(musicGain, target * 0.35, 0.2);
-  musicTransitionTimer = setTimeout(() => {
-    musicTransitionTimer = null;
-    rampTo(musicGain, target, 0.35);
-  }, 220);
-}
-
 function pauseMusicForBackground() {
   appIsForeground = false;
-  stopScheduler();
+  pauseBackgroundMusic();
   if (ctx?.state === "running") return Promise.resolve(ctx.suspend()).catch(() => undefined);
   return Promise.resolve();
 }
 
 function resumeMusicAfterBackground() {
   appIsForeground = true;
-  if (!audioUnlocked || !currentTrack || !settings.music.on || _masterMuted) return Promise.resolve();
-  return resumeContext().then((ac) => {
-    if (ac && canPlay("music")) startScheduler();
-  });
+  return resumeContext().then(() => syncBackgroundMusic());
 }
 
 export const music = {
-  play(track) {
-    if (!TRACKS[track]) return;
-    if (currentTrack === track) { // ensure audible if just toggled on
-      if (canPlay("music")) startScheduler();
-      return;
-    }
-    currentTrack = TRACKS[track];
-    if (!canPlay("music")) return;
-    startScheduler();
-    // smooth crossfade dip so the loop change isn't abrupt
-    const target = effective("music");
-    crossfadeMusic(target);
+  play() {
+    backgroundMusicRequested = true;
+    return syncBackgroundMusic();
   },
   stop() {
-    currentTrack = null;
-    stopScheduler();
-    if (musicTransitionTimer) clearTimeout(musicTransitionTimer);
-    musicTransitionTimer = null;
-    if (ctx) rampTo(musicGain, 0, 0.3);
+    backgroundMusicRequested = false;
+    pauseBackgroundMusic();
+    if (musicElement) {
+      try { musicElement.currentTime = 0; } catch {}
+    }
   },
   pause: pauseMusicForBackground,
   resume: resumeMusicAfterBackground,
-  sting(name) {
-    if (name === "winner") winnerSting();
-  },
 };
-
-function winnerSting() {
-  if (!canPlay("music")) return;
-  const seq = [N.C4, N.E4, N.G4, N.C5, N.E5];
-  seq.forEach((f, i) => mTone(f, 0.3, "triangle", 0.18, i * 0.09));
-  mTone(N.C2, 0.6, "triangle", 0.18, 0);
-  mTone(N.G2, 0.6, "triangle", 0.14, 0.05);
-  [N.C5, N.E5, N.G5].forEach((f) => mTone(f, 0.5, "sine", 0.1, 0.45));
-}
 
 // ---- sound effects (playful, restrained) ----
 export const sfx = {
@@ -355,10 +282,8 @@ export const sfx = {
 export function unlockAudio() {
   audioUnlocked = true;
   return resumeContext().then((ac) => {
-    if (!ac) return null;
     applyAudioSettings();
-    if (currentTrack && canPlay("music")) startScheduler();
-    return ac;
+    return ac || null;
   });
 }
 
@@ -382,7 +307,7 @@ export function getAudioDiagnostics() {
   return {
     unlocked: audioUnlocked,
     contextState: ctx?.state || "none",
-    schedulerRunning: !!schedulerId,
-    trackActive: !!currentTrack,
+    musicInstances: musicElement ? 1 : 0,
+    musicPlaying: !!musicElement && !musicElement.paused,
   };
 }

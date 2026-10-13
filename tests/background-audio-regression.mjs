@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 let contexts = 0;
-let scheduledIntervals = 0;
+const audioElements = [];
 const listeners = new Map();
 const savedSettings = new Map();
 
@@ -47,6 +47,31 @@ class FakeAudioContext {
   createOscillator() { return new FakeOscillator(); }
 }
 
+class FakeAudio {
+  constructor(src) {
+    this.src = src;
+    this.loop = false;
+    this.preload = "";
+    this.volume = 1;
+    this.paused = true;
+    this.currentTime = 0;
+    this.playCalls = 0;
+    this.pauseCalls = 0;
+    audioElements.push(this);
+  }
+
+  play() {
+    this.playCalls += 1;
+    this.paused = false;
+    return Promise.resolve();
+  }
+
+  pause() {
+    this.pauseCalls += 1;
+    this.paused = true;
+  }
+}
+
 const originalWindow = globalThis.window;
 const originalSetInterval = globalThis.setInterval;
 const originalClearInterval = globalThis.clearInterval;
@@ -55,6 +80,7 @@ const originalClearTimeout = globalThis.clearTimeout;
 
 globalThis.window = {
   AudioContext: FakeAudioContext,
+  Audio: FakeAudio,
   localStorage: {
     getItem: (key) => savedSettings.get(key) || null,
     setItem: (key, value) => savedSettings.set(key, value),
@@ -62,11 +88,7 @@ globalThis.window = {
   addEventListener(event, listener) { listeners.set(event, listener); },
   removeEventListener(event) { listeners.delete(event); },
 };
-globalThis.setInterval = (callback) => {
-  scheduledIntervals += 1;
-  callback();
-  return scheduledIntervals;
-};
+globalThis.setInterval = () => 1;
 globalThis.clearInterval = () => {};
 globalThis.setTimeout = (callback) => { callback(); return 1; };
 globalThis.clearTimeout = () => {};
@@ -74,9 +96,10 @@ globalThis.clearTimeout = () => {};
 try {
   const sound = await import(new URL("../src/lib/sound.js", import.meta.url));
 
-  // Selecting a route track cannot start an AudioContext before a gesture.
-  sound.music.play("lobby");
+  // Selecting background music cannot start playback before a gesture.
+  sound.music.play();
   assert.equal(contexts, 0, "music must not autoplay before user interaction");
+  assert.equal(audioElements.length, 0, "music must not allocate a media element before user interaction");
 
   const disarm = sound.armAudioUnlock();
   listeners.get("pointerdown")?.();
@@ -84,27 +107,36 @@ try {
   // blocks a tap. Await the same public gesture API before asserting state.
   await sound.unlockAudio();
   assert.equal(contexts, 1, "the first gesture should unlock exactly one context");
-  assert.equal(sound.getAudioDiagnostics().schedulerRunning, true);
+  assert.equal(audioElements.length, 1, "the first gesture should create one background track");
+  assert.equal(sound.getAudioDiagnostics().musicPlaying, true);
+  assert.equal(audioElements[0].loop, true, "the MP3 must use native gapless looping");
 
-  // Repeated route changes use the single scheduler rather than layering loops.
-  sound.music.play("writing");
-  sound.music.play("results");
-  assert.equal(contexts, 1, "route changes must reuse the existing AudioContext");
-  assert.equal(scheduledIntervals, 1, "route changes must not create overlapping schedulers");
+  // Repeated route changes reuse one media element rather than layering loops.
+  sound.music.play();
+  sound.music.play();
+  assert.equal(audioElements.length, 1, "route changes must not create overlapping media elements");
+  assert.equal(sound.getAudioDiagnostics().musicInstances, 1);
 
   sound.updateChannel("music", { on: false });
-  assert.equal(sound.getAudioDiagnostics().schedulerRunning, false, "music toggle stops the scheduler");
+  assert.equal(sound.getAudioDiagnostics().musicPlaying, false, "music toggle pauses the MP3");
   sound.updateChannel("music", { on: true, volume: 0.25 });
-  assert.equal(sound.getAudioDiagnostics().schedulerRunning, true, "music toggle restores the selected track");
-  assert.match(savedSettings.get("unreviewed:settings:v2"), /"music"/, "channel settings persist locally");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sound.getAudioDiagnostics().musicPlaying, true, "music toggle resumes the selected MP3");
+  sound.updateChannel("sfx", { on: false, volume: 0.2 });
+  assert.equal(sound.getAudioDiagnostics().musicPlaying, true, "SFX controls must not stop music");
+  const persisted = JSON.parse(savedSettings.get("unreviewed:settings:v2"));
+  assert.deepEqual(persisted.music, { on: true, volume: 0.25 }, "music settings persist locally");
+  assert.deepEqual(persisted.sfx, { on: false, volume: 0.2 }, "SFX settings persist independently");
 
   await sound.music.pause();
-  assert.equal(sound.getAudioDiagnostics().schedulerRunning, false, "backgrounding stops the scheduler");
+  assert.equal(sound.getAudioDiagnostics().musicPlaying, false, "backgrounding pauses the MP3");
   await sound.music.resume();
-  assert.equal(sound.getAudioDiagnostics().schedulerRunning, true, "resuming restores one scheduler");
+  assert.equal(sound.getAudioDiagnostics().musicPlaying, true, "resuming restores the MP3");
+  assert.equal(audioElements.length, 1, "backgrounding must not create another MP3 instance");
 
   disarm();
   sound.music.stop();
+  assert.equal(sound.getAudioDiagnostics().musicPlaying, false, "stopping ends background playback");
   console.log("Background audio regression passed.");
 } finally {
   globalThis.window = originalWindow;

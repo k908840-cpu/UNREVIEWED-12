@@ -21,6 +21,9 @@ class FakeOscillator {
       setValueAtTime(value) {
         if (!Number.isFinite(value)) throw new TypeError('frequency must be finite');
       },
+      exponentialRampToValueAtTime(value) {
+        if (!Number.isFinite(value)) throw new TypeError('frequency must be finite');
+      },
     };
   }
 
@@ -50,20 +53,17 @@ globalThis.window = {
   AudioContext: FakeAudioContext,
   localStorage: { getItem: () => null, setItem() {} },
 };
-// Run each track's first beat synchronously. Writing contains scalar stab
-// entries; prediction and results also exercise their lower/upper note ranges.
+// Preserve the timer countdown effect after replacing procedural music.
 globalThis.setInterval = (callback) => { callback(); return 1; };
 globalThis.clearInterval = () => {};
 globalThis.setTimeout = (callback) => { callback(); return 1; };
 
 try {
-  const { music, unlockAudio } = await import(new URL('../src/lib/sound.js', import.meta.url));
+  const { sfx, unlockAudio } = await import(new URL('../src/lib/sound.js', import.meta.url));
   await unlockAudio();
-  for (const track of ['lobby', 'writing', 'rating', 'prediction', 'results']) {
-    assert.doesNotThrow(() => music.play(track));
-    music.stop();
-  }
-  console.log('Writing audio regression passed.');
+  assert.doesNotThrow(() => sfx.tick(true));
+  assert.doesNotThrow(() => sfx.countdownEnd());
+  console.log('Countdown audio regression passed.');
 } finally {
   globalThis.window = originalWindow;
   globalThis.setInterval = originalSetInterval;
