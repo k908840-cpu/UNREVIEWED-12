@@ -289,7 +289,9 @@ export function unlockAudio() {
 
 export function armAudioUnlock() {
   if (typeof window === "undefined" || removeUnlockListeners) return removeUnlockListeners || (() => {});
-  const events = ["pointerdown", "touchstart", "keydown"];
+  // `click` is retained for WebViews that do not expose Pointer Events for
+  // every control; the app-shell capture handlers provide the same fallback.
+  const events = ["pointerdown", "click", "touchstart", "keydown"];
   const onInteraction = () => {
     removeUnlockListeners?.();
     void unlockAudio();

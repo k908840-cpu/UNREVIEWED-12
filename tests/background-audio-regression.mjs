@@ -102,7 +102,10 @@ try {
   assert.equal(audioElements.length, 0, "music must not allocate a media element before user interaction");
 
   const disarm = sound.armAudioUnlock();
-  listeners.get("pointerdown")?.();
+  assert.ok(listeners.get("pointerdown"), "pointer interactions must unlock audio");
+  assert.ok(listeners.get("click"), "click interactions must unlock audio");
+  assert.ok(listeners.get("keydown"), "keyboard interactions must unlock audio");
+  listeners.get("click")?.();
   // The listener intentionally starts the unlock asynchronously so it never
   // blocks a tap. Await the same public gesture API before asserting state.
   await sound.unlockAudio();

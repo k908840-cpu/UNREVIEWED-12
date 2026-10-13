@@ -100,9 +100,19 @@ export default function Layout() {
     if (roomCode) setQuitOpen(true);
     else navigate("/");
   };
+  // The window listener is the primary unlock path. Capture interactions on
+  // the app shell as a WebView-safe fallback so the first tap, click, or key
+  // press anywhere in the game can start music without changing that action.
+  const unlockAudioFromInteraction = () => { void unlockAudio(); };
 
   return (
-    <div className={cn("relative min-h-screen overflow-hidden", showtime ? "bg-background text-foreground" : "bg-cream text-[hsl(var(--cream-foreground))]")} style={{ "--accent": accent }}>
+    <div
+      className={cn("relative min-h-screen overflow-hidden", showtime ? "bg-background text-foreground" : "bg-cream text-[hsl(var(--cream-foreground))]")}
+      style={{ "--accent": accent }}
+      onPointerDownCapture={unlockAudioFromInteraction}
+      onClickCapture={unlockAudioFromInteraction}
+      onKeyDownCapture={unlockAudioFromInteraction}
+    >
       {/* ambient backdrop */}
       <AmbientBackdrop variant={showtime ? "show" : "paper"} />
 
