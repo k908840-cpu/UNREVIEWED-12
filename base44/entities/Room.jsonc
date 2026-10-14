@@ -33,7 +33,20 @@
       "default": "standard"
     },
     "host_session": {
-      "type": "string"
+      "type": "string",
+      "description": "Host identity; returned only by the capability-validated room function.",
+      "rls": {
+        "read": { "user_condition": { "role": "admin" } },
+        "write": { "user_condition": { "role": "admin" } }
+      }
+    },
+    "creator_capability_hash": {
+      "type": "string",
+      "description": "SHA-256 verifier for the pending creator capability; never exposed to anonymous clients.",
+      "rls": {
+        "read": { "user_condition": { "role": "admin" } },
+        "write": { "user_condition": { "role": "admin" } }
+      }
     },
     "max_players": {
       "type": "integer",
@@ -48,7 +61,10 @@
     "host_session"
   ],
   "rls": {
-    "read": {},
+    // The current anonymous SDK subscription uses Room only as a shared
+    // display-state feed. All mutations remain service-role-only, and the
+    // capability verifier above is field-private even on realtime events.
+    "read": true,
     "create": {
       "user_condition": {
         "role": "admin"

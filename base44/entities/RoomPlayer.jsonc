@@ -8,6 +8,14 @@
     "session_id": {
       "type": "string"
     },
+    "membership_capability_hash": {
+      "type": "string",
+      "description": "SHA-256 verifier for this player's server-issued membership capability.",
+      "rls": {
+        "read": { "user_condition": { "role": "admin" } },
+        "write": { "user_condition": { "role": "admin" } }
+      }
+    },
     "nickname": {
       "type": "string"
     },
@@ -34,7 +42,13 @@
     "session_id"
   ],
   "rls": {
-    "read": {},
+    // Rosters are returned only by the room backend after capability
+    // validation. This prevents direct enumeration of player/session data.
+    "read": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
     "create": {
       "user_condition": {
         "role": "admin"

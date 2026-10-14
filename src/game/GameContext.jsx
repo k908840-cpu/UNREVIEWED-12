@@ -6,6 +6,7 @@ import { setMuted as setSfxMuted, setVolume as setSfxVolume } from "@/lib/sound"
 import {
   getSessionId, getActiveRoomCode, setActiveRoomCode, clearActiveRoom,
   getPendingRoomCode, setPendingRoomCode, clearPendingRoomCode,
+  getRoomMembershipCapability, setRoomMembershipCapability, clearRoomMembershipCapability,
 } from "@/lib/session";
 import { advanceFallbackDelay, createAdvanceCoordinator, createAdvanceRequestGate, phaseDeadlineKey } from "./advanceCoordinator";
 import { createAnswerSubmissionCoordinator } from "./answerSubmissionCoordinator";
@@ -216,7 +217,9 @@ export function GameProvider({ children }) {
     // straight back into a room that the server already removed them from.
     savedRoomRecoveryAttemptRef.current += 1;
     setResumeOfferState(null);
+    const capabilityRoomCode = activeRoomCodeRef.current || getActiveRoomCode() || getPendingRoomCode();
     clearActiveRoom();
+    if (capabilityRoomCode) clearRoomMembershipCapability(capabilityRoomCode);
     clearPendingRoomCode();
     activeRoomCodeRef.current = "";
     seenSelfRef.current = false;
@@ -248,12 +251,19 @@ export function GameProvider({ children }) {
   // ---- lobby actions (unchanged) ----
   const createRoom = useCallback(async () => {
     const res = await base44.functions.invoke("room", { action: "create", sessionId, mode, length });
-    const created = res?.data?.room;
+    const data = res?.data || {};
+    const created = data.room;
     if (!created) throw new Error("create_failed");
+    if (typeof data.membership_capability !== "string" || !data.membership_capability) {
+      // Do not silently use the historical session-id authorization path when
+      // a frontend reaches a backend that has not deployed this security fix.
+      throw new Error("membership_capability_missing");
+    }
     // Creating a room leads to profile setup; it is not a joined session yet.
     // Do not start the active-room networking lifecycle until join succeeds.
     clearActiveRoom();
     activeRoomCodeRef.current = "";
+    setRoomMembershipCapability(created.code, data.membership_capability);
     setPendingRoomCode(created.code); setPendingRoomCodeState(created.code);
     setRoom(created); setRoomCode("");
     setIsHost(true); setMode(created.mode); setLength(created.length); setPhase("config");
@@ -287,8 +297,9 @@ export function GameProvider({ children }) {
   }, [sessionId]);
 
   const requestRoster = useCallback(async (code, clientReason = "unknown") => {
+    const membershipCapability = getRoomMembershipCapability(code);
     const res = await base44.functions.invoke("room", {
-      action: "getRoster", code, sessionId, client_reason: clientReason,
+      action: "getRoster", code, sessionId, membership_capability: membershipCapability, client_reason: clientReason,
     });
     noteBackendBuild(res);
     return res?.data || {};
@@ -299,12 +310,18 @@ export function GameProvider({ children }) {
     const joiningCode = normalizeRoomCode(requestedRoomCode || pendingRoomCode);
     if (joiningCode.length !== 4) throw new Error("missing_room");
     try {
+      const existingCapability = getRoomMembershipCapability(joiningCode);
       const res = await base44.functions.invoke("room", {
         action: "join", sessionId, code: joiningCode,
+        ...(existingCapability ? { membership_capability: existingCapability } : {}),
         nickname, avatar_id: avatar?.id || "", photo_url: photo || "",
       });
       const data = res?.data || {};
       if (data.error) throw new Error(data.error);
+      const membershipCapability = data.membership_capability || existingCapability;
+      if (typeof membershipCapability !== "string" || !membershipCapability) {
+        throw new Error("membership_capability_missing");
+      }
 
       // A successful join has already established server-authoritative
       // membership. Activate that session before roster hydration so a
@@ -341,6 +358,7 @@ export function GameProvider({ children }) {
       postJoinRosterHydratedRoomRef.current = "";
       deferredJoinRosterReconciliationRoomRef.current = "";
       activeRoomCodeRef.current = joiningCode;
+      setRoomMembershipCapability(joiningCode, membershipCapability);
       setRoomCode(joiningCode); setActiveRoomCode(joiningCode);
       clearPendingRoomCode(); setPendingRoomCodeState("");
       setPhase("lobby");
@@ -360,14 +378,14 @@ export function GameProvider({ children }) {
     if (!code) return { ok: false, error: "no_room" };
     const result = await saveRoomConfig({
       invoke: (name, payload) => base44.functions.invoke(name, payload),
-      code, sessionId, mode: m, length: l,
+      code, sessionId, membershipCapability: getRoomMembershipCapability(code), mode: m, length: l,
     });
     if (result.ok) setRoom(result.room);
     return result;
   }, [roomCode, pendingRoomCode, sessionId]);
 
   const kickPlayer = useCallback(async (targetSession) => {
-    try { await base44.functions.invoke("room", { action: "kick", code: roomCode, sessionId, target_session: targetSession }); } catch {}
+    try { await base44.functions.invoke("room", { action: "kick", code: roomCode, sessionId, membership_capability: getRoomMembershipCapability(roomCode), target_session: targetSession }); } catch {}
   }, [roomCode, sessionId]);
 
   const requestLeaveRoom = useCallback(async (requestedRoomCode = roomCode) => {
@@ -376,7 +394,7 @@ export function GameProvider({ children }) {
     const code = normalizeRoomCode(requestedRoomCode);
     if (!code) return { ok: true };
     try {
-      const res = await base44.functions.invoke("room", { action: "leave", code, sessionId });
+      const res = await base44.functions.invoke("room", { action: "leave", code, sessionId, membership_capability: getRoomMembershipCapability(code) });
       noteBackendBuild(res);
       const data = res?.data || {};
       if (data.error) {
@@ -476,7 +494,12 @@ export function GameProvider({ children }) {
   }, [activateSavedRoom, navigate, requestRoster, resetRoomState, sessionId, setResumeOfferState]);
 
   const endRoom = useCallback(async () => {
-    try { if (roomCode) await base44.functions.invoke("room", { action: "close", code: roomCode, sessionId }); } catch {}
+    try {
+      if (roomCode) await base44.functions.invoke("room", {
+        action: "close", code: roomCode, sessionId,
+        membership_capability: getRoomMembershipCapability(roomCode),
+      });
+    } catch {}
     resetRoomState();
   }, [roomCode, sessionId, resetRoomState]);
 
@@ -634,7 +657,11 @@ export function GameProvider({ children }) {
   const callRoom = useCallback(async (action, extra = {}) => {
     if (!roomCode) return { error: "no_room" };
     try {
-      const res = await base44.functions.invoke("room", { action, sessionId, code: roomCode, ...extra });
+      const membershipCapability = getRoomMembershipCapability(roomCode);
+      if (!membershipCapability) return { error: "missing_membership_capability", retryable: false, ambiguous: false };
+      const res = await base44.functions.invoke("room", {
+        action, sessionId, code: roomCode, membership_capability: membershipCapability, ...extra,
+      });
       const data = res?.data || {};
       // Only a successful response the server flagged as presence_recorded
       // counts; an older backend never sets it, so heartbeats are unchanged.
@@ -666,7 +693,11 @@ export function GameProvider({ children }) {
 
   const startGame = useCallback(async () => {
     try {
-      const res = await base44.functions.invoke("room", { action: "start", code: roomCode, sessionId });
+      const membershipCapability = getRoomMembershipCapability(roomCode);
+      if (!membershipCapability) return { error: "missing_membership_capability" };
+      const res = await base44.functions.invoke("room", {
+        action: "start", code: roomCode, sessionId, membership_capability: membershipCapability,
+      });
       const data = res?.data || {};
       if (data.error) return { error: data.error, active: data.active };
       if (data.room) {
@@ -818,7 +849,11 @@ export function GameProvider({ children }) {
   const resetToLobby = useCallback(async () => {
     if (!roomCode || !isHost) return { error: "not_host" };
     try {
-      const res = await base44.functions.invoke("room", { action: "reset_to_lobby", code: roomCode, sessionId });
+      const membershipCapability = getRoomMembershipCapability(roomCode);
+      if (!membershipCapability) return { error: "missing_membership_capability" };
+      const res = await base44.functions.invoke("room", {
+        action: "reset_to_lobby", code: roomCode, sessionId, membership_capability: membershipCapability,
+      });
       noteBackendBuild(res);
       const data = res?.data || {};
       if (data.error) return data;
@@ -949,7 +984,13 @@ export function GameProvider({ children }) {
       if (roomStatusRef.current === "playing" && roomPhaseRef.current !== "finished" && d.status === "lobby") return;
       roomStatusRef.current = d.status || roomStatusRef.current;
       roomPhaseRef.current = d.game_state?.phase || roomPhaseRef.current;
-      setRoom(d);
+      // Room.host_session is field-private on the direct entity feed. Keep
+      // the last capability-validated value from join/getRoster/heartbeat
+      // when a realtime game-state event omits it.
+      setRoom((current) => ({
+        ...d,
+        host_session: typeof d.host_session === "string" ? d.host_session : current?.host_session,
+      }));
       syncHostSession(d.host_session);
     });
 
@@ -960,6 +1001,7 @@ export function GameProvider({ children }) {
       try {
         const res = await base44.functions.invoke("room", {
           action: "heartbeat", code: roomCode, sessionId,
+          membership_capability: getRoomMembershipCapability(roomCode),
           // Lets the server return the roster only when this client's view is stale.
           known_roster_ids: playersRef.current.map((player) => player.sessionId).filter(Boolean),
         });

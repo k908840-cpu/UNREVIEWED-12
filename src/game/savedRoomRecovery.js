@@ -1,6 +1,12 @@
 // A saved room code proves only that this device joined a room before. It does
 // not prove that the player still wants to enter it when the app opens.
-const TERMINAL_ROOM_ERRORS = new Set(["not_found", "closed", "not_in_room"]);
+// A device without its local membership capability cannot prove it owns a
+// saved anonymous seat. Treat it as stale instead of falling back to the
+// historical session-id-only recovery path.
+const TERMINAL_ROOM_ERRORS = new Set([
+  "not_found", "closed", "not_in_room", "missing_membership_capability",
+  "invalid_membership_capability", "legacy_membership",
+]);
 
 export function classifySavedRoomResponse(data, sessionId) {
   const error = data?.error;

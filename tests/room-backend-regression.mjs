@@ -23,11 +23,33 @@ const fake = createFakeBase44({ now: () => clock });
 quiet();
 const handler = await loadRoomHandler(process.env.ROOM_BACKEND_PATH || path.join(ROOT, 'base44/functions/room/entry.ts'));
 loud();
-const call = (sessionId, body) => callHandler(handler, { sessionId, ...body });
+const capabilities = new Map();
+const capabilityKey = (sessionId, code) => `${sessionId}:${code}`;
+const rawCall = (sessionId, body) => callHandler(handler, { sessionId, ...body });
+// Simulates one browser keeping the opaque server-issued value in its own
+// local storage. It never shares a capability between players unless a test
+// deliberately models theft.
+const call = async (sessionId, body) => {
+  const code = body.code;
+  const needsCapability = code && body.action !== 'lookup' && body.action !== 'create';
+  const stored = needsCapability ? capabilities.get(capabilityKey(sessionId, code)) : '';
+  const request = {
+    ...body,
+    ...(needsCapability && !Object.hasOwn(body, 'membership_capability') && stored
+      ? { membership_capability: stored }
+      : {}),
+  };
+  const result = await rawCall(sessionId, request);
+  const returnedCode = result.data?.room?.code || code;
+  if (typeof result.data?.membership_capability === 'string' && returnedCode) {
+    capabilities.set(capabilityKey(sessionId, returnedCode), result.data.membership_capability);
+  }
+  return result;
+};
 const SESSIONS = ['s-alpha', 's-bravo', 's-charlie', 's-delta'];
 
 async function lobby({ join = SESSIONS.length } = {}) {
-  fake.tables.Room.length = 0; fake.tables.RoomPlayer.length = 0; fake.resetOps();
+  fake.tables.Room.length = 0; fake.tables.RoomPlayer.length = 0; fake.resetOps(); capabilities.clear();
   const { data } = await call(SESSIONS[0], { action: 'create', mode: 'family', length: 'quick' });
   const code = data.room.code;
   for (const [i, sessionId] of SESSIONS.slice(0, join).entries()) {
@@ -312,6 +334,74 @@ async function nonMembersCannotRateOrPredict() {
   assert.equal(room(code).game_state.prediction ?? null, null, 'no prediction may be stored for a non-member');
 }
 
+// ------------------------------------------------ membership capabilities
+async function capabilitiesArePrivateAndRequiredForReconnection() {
+  const code = await lobby();
+  const alphaCapability = capabilities.get(capabilityKey('s-alpha', code));
+  const bravoCapability = capabilities.get(capabilityKey('s-bravo', code));
+  assert.match(alphaCapability, /^[A-Za-z0-9_-]{43}$/, 'creator receives one opaque 256-bit capability');
+  assert.match(bravoCapability, /^[A-Za-z0-9_-]{43}$/, 'joining player receives one opaque 256-bit capability');
+  assert.notEqual(alphaCapability, bravoCapability, 'each player gets an independent capability');
+
+  const directRoom = room(code);
+  assert.match(directRoom.creator_capability_hash, /^[a-f0-9]{64}$/, 'only a hash is stored on the room');
+  const directPlayer = fake.tables.RoomPlayer.find((player) => player.session_id === 's-bravo');
+  assert.match(directPlayer.membership_capability_hash, /^[a-f0-9]{64}$/, 'only a hash is stored on the player record');
+
+  const roster = await call('s-bravo', { action: 'getRoster', code });
+  assert.equal(JSON.stringify(roster.data).includes('membership_capability_hash'), false, 'roster never leaks stored verifiers');
+  assert.equal(JSON.stringify(roster.data).includes(alphaCapability), false, 'roster never leaks another player capability');
+  assert.equal(JSON.stringify(roster.data).includes('creator_capability_hash'), false, 'room response never leaks creator verifier');
+  const lookup = await call('s-outsider', { action: 'lookup', code });
+  assert.equal(lookup.data.room.host_session, undefined, 'pre-join lookup is a minimal joinability response');
+  assert.equal(lookup.data.room.creator_capability_hash, undefined, 'pre-join lookup never exposes a verifier');
+
+  // A genuine reconnect uses the locally retained capability and succeeds.
+  const reconnect = await call('s-bravo', { action: 'getRoster', code });
+  assert.equal(reconnect.status, 200, 'saved-room recovery works with the retained capability');
+}
+
+async function stolenSessionIdsCannotImpersonateMembersOrHosts() {
+  const code = await lobby();
+  const before = snapshot(code);
+  const bravoCapability = capabilities.get(capabilityKey('s-bravo', code));
+
+  // An attacker learns the visible host session id but not its capability.
+  let res = await rawCall('s-alpha', { action: 'start', code });
+  assert.equal(res.status, 401); assert.equal(res.data.error, 'missing_membership_capability');
+  assert.equal(snapshot(code), before, 'a guessed host session cannot start a game');
+
+  // Replaying another member's secret alongside the host session id fails too.
+  res = await rawCall('s-alpha', { action: 'kick', code, target_session: 's-bravo', membership_capability: bravoCapability });
+  assert.equal(res.status, 403); assert.equal(res.data.error, 'invalid_membership_capability');
+  assert.equal(snapshot(code), before, 'a stolen session id with the wrong capability cannot kick');
+
+  // A known session cannot reclaim (or mutate) its existing seat without its
+  // own bearer capability. This closes the previous session-id-only join path.
+  const wrongBravoCapability = 'A'.repeat(43) === bravoCapability ? 'B'.repeat(43) : 'A'.repeat(43);
+  res = await rawCall('s-bravo', {
+    action: 'join', code, nickname: 'Imposter', avatar_id: 'a1', membership_capability: wrongBravoCapability,
+  });
+  assert.equal(res.status, 403); assert.equal(res.data.error, 'invalid_membership_capability');
+  assert.equal(fake.tables.RoomPlayer.find((player) => player.session_id === 's-bravo').nickname, 'P1');
+
+  // The real host still starts normally and all four valid members remain
+  // eligible for the existing gameplay path.
+  const started = await call('s-alpha', { action: 'start', code });
+  assert.equal(started.status, 200, 'normal four-player host action stays available');
+  assert.equal(started.data.room.status, 'playing');
+}
+
+async function legacySeatsNeverReceiveAnInsecureCapabilityUpgrade() {
+  const code = await lobby();
+  const bravo = fake.tables.RoomPlayer.find((player) => player.session_id === 's-bravo');
+  delete bravo.membership_capability_hash;
+  const res = await call('s-bravo', { action: 'heartbeat', code });
+  assert.equal(res.status, 409);
+  assert.equal(res.data.error, 'legacy_membership');
+  assert.equal(bravo.membership_capability_hash, undefined, 'the server never mints a replacement from a legacy session id');
+}
+
 const tests = [
   presenceTrackerOnlyTrustsServerConfirmedActions,
   normalHeartbeatCostsTwoReadsAndOneWrite,
@@ -322,6 +412,9 @@ const tests = [
   submitPathsStillAdvanceAndScoreOnTheServer,
   nonMembersCannotSubmitOrAdvance,
   nonMembersCannotRateOrPredict,
+  capabilitiesArePrivateAndRequiredForReconnection,
+  stolenSessionIdsCannotImpersonateMembersOrHosts,
+  legacySeatsNeverReceiveAnInsecureCapabilityUpgrade,
 ];
 let failed = 0;
 for (const test of tests) {

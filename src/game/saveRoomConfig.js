@@ -15,6 +15,7 @@ export async function saveRoomConfig({
   invoke,
   code,
   sessionId,
+  membershipCapability,
   mode,
   length,
   attempts = CONFIG_SAVE_ATTEMPTS,
@@ -22,10 +23,13 @@ export async function saveRoomConfig({
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
   if (!code) return { ok: false, error: "no_room" };
+  if (!membershipCapability) return { ok: false, error: "missing_membership_capability" };
   let lastError = "config_failed";
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
-      const res = await invoke("room", { action: "config", code, sessionId, mode, length });
+      const res = await invoke("room", {
+        action: "config", code, sessionId, membership_capability: membershipCapability, mode, length,
+      });
       const data = res?.data || {};
       if (data.error) {
         lastError = data.error;

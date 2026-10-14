@@ -34,7 +34,7 @@ const inactive = classifySavedRoomResponse({
 }, sessionId);
 assert.equal(inactive.status, 'available', 'an inactive member can explicitly reconnect');
 
-for (const error of ['not_found', 'closed', 'not_in_room']) {
+for (const error of ['not_found', 'closed', 'not_in_room', 'missing_membership_capability', 'invalid_membership_capability', 'legacy_membership']) {
   assert.deepEqual(
     classifySavedRoomResponse({ error }, sessionId),
     { status: 'stale', reason: error },

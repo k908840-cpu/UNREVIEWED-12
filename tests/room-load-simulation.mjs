@@ -51,7 +51,15 @@ const handler = await loadRoomHandler(BACKEND);
 const invocations = [];
 async function invoke(player, body) {
   invocations.push({ t: simNow, player: player.name, action: body.action });
-  const req = new Request('http://local/functions/room', { method: 'POST', body: JSON.stringify({ sessionId: player.sid, ...body }) });
+  const needsCapability = body.code && body.action !== 'lookup' && body.action !== 'create';
+  const payload = {
+    sessionId: player.sid,
+    ...body,
+    ...(needsCapability && !Object.hasOwn(body, 'membership_capability') && player.capability
+      ? { membership_capability: player.capability }
+      : {}),
+  };
+  const req = new Request('http://local/functions/room', { method: 'POST', body: JSON.stringify(payload) });
   const res = await handler(req);
   const data = await res.json().catch(() => ({}));
   const outcome = { status: res.status, data };
@@ -87,6 +95,7 @@ const PACE_MS = Number(args.pace) || 1250;
 
 const players = NAMES.map((name, idx) => ({
   idx, name, sid: `sess-${name.toLowerCase()}-${1000 + idx * 7}`,
+  capability: '',
   known: new Set(), status: 'lobby', joinedAt: null, lastRosterAt: -1e9,
   rosterTimer: false, tracker: createPresenceTracker({ now: () => simNow }),
   skippedHeartbeats: 0,
@@ -150,6 +159,8 @@ let finished = false;
 async function joinPlayer(p) {
   const { data } = await invoke(p, { action: 'join', code, nickname: p.name, avatar_id: 'a1', photo_url: '' });
   assert(data.room, `${p.name} join failed: ${JSON.stringify(data)}`);
+  assert.equal(typeof data.membership_capability, 'string', `${p.name} must receive its server-issued membership capability`);
+  p.capability = data.membership_capability;
   p.joinedAt = simNow;
   p.known = new Set((data.players || [data.player]).map((x) => x.session_id));
   startClientTimers(p);
@@ -157,6 +168,8 @@ async function joinPlayer(p) {
 {
   const { data } = await invoke(host, { action: 'create', mode: 'family', length: LENGTH });
   code = data.room.code;
+  assert.equal(typeof data.membership_capability, 'string', 'creator must receive a pending-room capability');
+  host.capability = data.membership_capability;
   await invoke(host, { action: 'config', code, mode: 'family', length: LENGTH });
   at(simNow + 500, () => joinPlayer(host));
   players.slice(1).forEach((p, i) => {

@@ -177,7 +177,7 @@ async function normalHeartbeatAvoidsRedundantEntityReads() {
   // guarantees this test always protected.
   const entry = await readFile(path.join(ROOT, 'base44/functions/room/entry.ts'), 'utf8');
   const heartbeat = entry.slice(entry.indexOf("case 'heartbeat':"), entry.indexOf("case 'leave':"));
-  assert.match(heartbeat, /if \(!me\) return Response\.json\(\{ error: 'not_in_room' \}/, 'membership must be validated before the presence write');
+  assert.match(heartbeat, /const membership = await membershipError\(players\);[\s\S]*?const me = membership\.player;/, 'capability-bound membership must be validated before the presence write');
   assert.match(heartbeat, /catch \(error\)[\s\S]*?error: 'gone'[\s\S]*?error: 'not_in_room'/, 'a failed presence write must re-validate the room and membership before reporting an error');
   const afterWrite = heartbeat.slice(heartbeat.indexOf('const freshPlayers'));
   assert.doesNotMatch(afterWrite, /findRoom\(|playersOf\(/, 'a successful heartbeat must not reread the room or roster after the write');
@@ -357,8 +357,8 @@ async function persistedPredictionIsAcceptedAfterAnHttp500() {
 async function predictionEndpointTreatsMatchingRetryAsIdempotent() {
   const entry = await readFile(path.join(ROOT, 'base44/functions/room/entry.ts'), 'utf8');
   const prediction = entry.slice(entry.indexOf("case 'submit_prediction':"), entry.indexOf("case 'advance':"));
-  assert.match(prediction, /gs\.prediction === answerId\) return Response\.json\(\{ room, accepted: true, already_predicted: true \}\)/);
-  assert.match(prediction, /return Response\.json\(\{ room, error: 'already_predicted' \}, \{ status: 409 \}\)/);
+  assert.match(prediction, /gs\.prediction === answerId\) return Response\.json\(\{ room: displayRoom\(room\), accepted: true, already_predicted: true \}\)/);
+  assert.match(prediction, /return Response\.json\(\{ room: displayRoom\(room\), error: 'already_predicted' \}, \{ status: 409 \}\)/);
 }
 
 async function smokeTestWaitsForRenderedLeaderboardAndRoundTwoContent() {

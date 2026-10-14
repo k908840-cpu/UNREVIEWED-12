@@ -10,7 +10,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (file) => readFile(path.join(ROOT, file), 'utf8');
 const httpError = (status, error) => Object.assign(new Error(`HTTP ${status}`), { response: { status, data: error ? { error } : {} } });
 const noSleep = () => Promise.resolve();
-const base = { code: 'ABCD', sessionId: 's1', mode: 'adult', length: 'standard', sleep: noSleep };
+const base = { code: 'ABCD', sessionId: 's1', membershipCapability: 'capability', mode: 'adult', length: 'standard', sleep: noSleep };
 
 async function savedModeIsConfirmedBeforeContinuing() {
   const calls = [];
@@ -18,7 +18,7 @@ async function savedModeIsConfirmedBeforeContinuing() {
   const result = await saveRoomConfig({ ...base, invoke });
   assert.equal(result.ok, true);
   assert.equal(result.room.mode, 'adult');
-  assert.deepEqual(calls[0], { name: 'room', payload: { action: 'config', code: 'ABCD', sessionId: 's1', mode: 'adult', length: 'standard' } });
+  assert.deepEqual(calls[0], { name: 'room', payload: { action: 'config', code: 'ABCD', sessionId: 's1', membership_capability: 'capability', mode: 'adult', length: 'standard' } });
 }
 
 async function transientFailureIsRetriedThenSucceeds() {
@@ -57,6 +57,8 @@ async function serverRefusalsAndUnconfirmedSavesFail() {
   assert.equal(noRoom.ok, false);
   const missingCode = await saveRoomConfig({ ...base, code: '', invoke: async () => { throw new Error('should not be called'); } });
   assert.deepEqual([missingCode.ok, missingCode.error], [false, 'no_room']);
+  const missingCapability = await saveRoomConfig({ ...base, membershipCapability: '', invoke: async () => { throw new Error('should not be called'); } });
+  assert.deepEqual([missingCapability.ok, missingCapability.error], [false, 'missing_membership_capability']);
 }
 
 function nameSubstitutionIsLiteral() {
