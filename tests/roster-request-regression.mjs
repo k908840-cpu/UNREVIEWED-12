@@ -171,7 +171,15 @@ async function wiringAndDiagnosticsStayInPlace() {
   const lookup = entry.slice(entry.indexOf("case 'lookup'"), entry.indexOf("case 'getRoster'"));
   assert.ok(!lookup.includes('playersOf'), 'lookup must not read RoomPlayer');
   assert.ok(!lookup.includes('active_count:'), 'lookup response no longer carries active_count');
-  assert.match(lookup, /Response\.json\(\{ room, build: BACKEND_BUILD_ID \}\)/);
+  // Lookup intentionally returns a minimal pre-join projection rather than
+  // the complete Room record: the latter could disclose game state or the
+  // field-private host identity before membership is established.
+  assert.match(lookup, /Response\.json\(\{ room: \{/);
+  assert.match(lookup, /code: room\.code, status: room\.status, mode: room\.mode/);
+  assert.match(lookup, /length: room\.length, max_players: room\.max_players/);
+  assert.ok(!lookup.includes('host_session'), 'lookup must not disclose the host session');
+  assert.ok(!lookup.includes('game_state'), 'lookup must not disclose game state');
+  assert.match(lookup, /build: BACKEND_BUILD_ID/);
   assert.match(lookup, /not_found/);
   assert.match(lookup, /status: 410/);
   assert.match(entry, /headers\.set\(BACKEND_BUILD_HEADER, BACKEND_BUILD_ID\)/);
