@@ -84,7 +84,7 @@ export function GameProvider({ children }) {
   const [pendingRoomCode, setPendingRoomCodeState] = useState(() => getPendingRoomCode());
   const [room, setRoom] = useState(null);
   const [isHost, setIsHost] = useState(false);
-  const [you, setYou] = useState({ nickname: "", photo: null, avatar: PRESET_AVATARS[0] });
+  const [you, setYou] = useState({ id: "", nickname: "", photo: null, avatar: PRESET_AVATARS[0], isHost: false });
   const [players, setPlayers] = useState([]);
   const [leftReason, setLeftReason] = useState(null);
   const [resumeOffer, setResumeOffer] = useState(() => (
@@ -105,8 +105,8 @@ export function GameProvider({ children }) {
   const lastRosterRequestRef = useRef({ code: "", at: 0 });
   const backoffRef = useRef(0);
   const backoffTimerRef = useRef(null);
-  const fetchRosterRef = useRef(async () => {});
-  const refreshPlayersRef = useRef(() => {});
+  const fetchRosterRef = useRef(/** @type {(code?: string, clientReason?: string) => Promise<void>} */ (async () => {}));
+  const refreshPlayersRef = useRef(/** @type {(options?: { reason?: string }) => void} */ (() => {}));
   const activeRoomCodeRef = useRef(persistedRoomCode);
   const rosterPrimedRoomRef = useRef("");
   const joinedRosterRoomRef = useRef("");
@@ -232,7 +232,7 @@ export function GameProvider({ children }) {
     backoffRef.current = 0; rosterControllerRef.current?.invalidate();
     lastRosterRequestRef.current = { code: "", at: 0 };
     setRoomCode(""); setPendingRoomCodeState(""); setRoom(null); setIsHost(false); setPlayers([]);
-    setYou({ nickname: "", photo: null, avatar: PRESET_AVATARS[0] });
+    setYou({ id: "", nickname: "", photo: null, avatar: PRESET_AVATARS[0], isHost: false });
     setLeftReason(null); setPhase("landing");
   }, [setResumeOfferState]);
   resetRoomStateRef.current = resetRoomState;
@@ -410,9 +410,11 @@ export function GameProvider({ children }) {
     setRoom(existing); setRoomCode(code); setMode(existing.mode); setLength(existing.length);
     setIsHost(hostNow);
     setYou({
+      id: sessionId,
       nickname: mine.nickname,
       photo: mine.photo_url || null,
       avatar: PRESET_AVATARS.find((avatar) => avatar.id === mine.avatar_id) || PRESET_AVATARS[0],
+      isHost: hostNow,
     });
     setPlayers(recovered.players.map((player) => mapPlayer(player, sessionId, existing.host_session)));
     seenSelfRef.current = true;

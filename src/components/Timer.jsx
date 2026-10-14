@@ -8,7 +8,7 @@ import { sfx, useAudioSettings } from "@/lib/sound";
 // approximately the same remaining time. `seconds` is the total duration
 // used for the ring percentage. Phase advancement is coordinated by
 // GameContext; a display timer never mutates the room on its own.
-export default function Timer({ seconds = 30, deadline, running = true, accent = "primary", size = 64, strokeWidth = 6, showSeconds = true, className }) {
+export default function Timer({ seconds = 30, deadline = undefined, running = true, accent = "primary", size = 64, strokeWidth = 6, showSeconds = true, className = "" }) {
   const settings = useAudioSettings();
   const [remaining, setRemaining] = useState(deadline ? Math.max(0, Math.round((Date.parse(deadline) - Date.now()) / 1000)) : seconds);
   const firedRef = useRef(false);

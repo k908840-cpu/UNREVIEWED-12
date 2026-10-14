@@ -128,7 +128,7 @@ function PodiumColumn({ player, place, height, show, delay = 0, big = false }) {
   );
 }
 
-function ActionBtn({ onClick, icon: Icon, label, primary }) {
+function ActionBtn({ onClick, icon: Icon, label, primary = false }) {
   return (
     <button onClick={onClick} className={cn("inline-flex items-center justify-center gap-2 rounded-full py-3.5 font-display text-lg uppercase tracking-wide transition", primary ? "bg-primary text-primary-foreground" : "border border-border bg-card text-foreground hover:border-primary")}>
       <Icon size={18} /> {label}

@@ -12,7 +12,7 @@ const TONES = {
 };
 
 // A rubber-stamp: double border, uppercase display, slight rotation + ink texture.
-export default function Stamp({ children, tone = "yellow", rotate = -8, className, press = false }) {
+export default function Stamp({ children, tone = "yellow", rotate = -8, className = "", press = false }) {
   return (
     <span
       className={cn(
@@ -20,7 +20,7 @@ export default function Stamp({ children, tone = "yellow", rotate = -8, classNam
         TONES[tone] || TONES.yellow,
         press && "anim-stamp"
       )}
-      style={{ "--stamp-rot": `${rotate}deg`, transform: `rotate(${rotate}deg)` }}
+      style={/** @type {React.CSSProperties & Record<"--stamp-rot", string>} */ ({ "--stamp-rot": `${rotate}deg`, transform: `rotate(${rotate}deg)` })}
     >
       {children}
     </span>

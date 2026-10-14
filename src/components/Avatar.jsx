@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { cn } from "@/lib/utils";
 
 // Avatar: photo (with graceful fallback) → preset emoji avatar → initials.
-export default function Avatar({ player, size = 48, className, ring = false, square = false }) {
+export default function Avatar({ player, size = 48, className = "", ring = false, square = false }) {
   const [imgError, setImgError] = useState(false);
   const [imgLoaded, setImgLoaded] = useState(false);
 

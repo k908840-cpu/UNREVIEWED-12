@@ -9,7 +9,7 @@ const COLORS = {
   ink: "stroke-[hsl(var(--ink))]",
 };
 
-export default function Scribble({ color = "yellow", className, width = 160 }) {
+export default function Scribble({ color = "yellow", className = "", width = 160 }) {
   return (
     <svg
       viewBox="0 0 200 18"

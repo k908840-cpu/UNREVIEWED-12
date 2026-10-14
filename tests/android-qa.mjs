@@ -130,6 +130,14 @@ function requireSuccess(run, description) {
   if (run.code !== 0) throw new Error(`${description} failed (exit ${run.code}). See ${run.logPath}`);
 }
 
+function isBlockedAndroidHostRuntime(run) {
+  const message = [run?.stdout, run?.stderr, run?.error?.message].filter(Boolean).join("\n");
+  // These are failures in this automation host before Capacitor, Gradle, ADB,
+  // or the app can execute. They are reported as explicit prerequisite skips,
+  // never as a product pass. Any normal Android command failure remains a FAIL.
+  return /uv_os_get_passwd returned ENOMEM|Cannot mkdir .*\.android.*Permission denied/i.test(message);
+}
+
 async function findOpenPort() {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -168,7 +176,20 @@ function startPreview(port) {
   return {
     child,
     async stop() {
-      if (!child.killed) child.kill();
+      if (child.exitCode === null && child.pid) {
+        if (process.platform === "win32") {
+          // `npm.cmd` launches Vite through nested cmd/node processes. Killing
+          // only the wrapper leaves Vite listening in the background and can
+          // keep this gate alive after it has written its report.
+          await new Promise((resolve) => {
+            const killer = spawn(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "taskkill", "/pid", String(child.pid), "/t", "/f"], { windowsHide: true });
+            killer.once("error", resolve);
+            killer.once("close", resolve);
+          });
+        } else {
+          child.kill("SIGTERM");
+        }
+      }
       await writeLog("vite-preview", Buffer.concat(output).toString("utf8"));
     },
   };
@@ -242,6 +263,9 @@ async function waitForAndroidBoot(tools, serial, timeout = 180_000) {
 
 async function ensureEmulator(tools) {
   const listed = await adb(tools, ["devices"]);
+  if (isBlockedAndroidHostRuntime(listed)) {
+    skip("ADB cannot access its Windows .android directory in this execution host. Run the gate from an interactive Windows PowerShell session with the Android SDK user profile available.");
+  }
   requireSuccess(listed, "ADB device discovery");
   const online = parseAdbDevices(listed.stdout);
   const emulator = online.find((serial) => serial.startsWith("emulator-"));
@@ -511,6 +535,9 @@ if (!playwrightAvailable) {
 await check("Capacitor Android sync and debug APK build", async () => {
   if (!await exists(path.join(ROOT, "android"))) skip("The existing android/ Capacitor project is unavailable in this checkout.");
   const sync = await runProcess(npx, ["--no-install", "cap", "sync", "android"], { name: "capacitor-sync", timeout: 240_000 });
+  if (isBlockedAndroidHostRuntime(sync)) {
+    skip("Node cannot access the Windows account profile required by Capacitor in this execution host (uv_os_get_passwd returned ENOMEM). Run the gate from an interactive Windows PowerShell session.");
+  }
   requireSuccess(sync, "Capacitor Android sync");
   const gradlew = path.join(ROOT, "android", process.platform === "win32" ? "gradlew.bat" : "gradlew");
   if (!await exists(gradlew)) throw new Error(`Android Gradle wrapper is missing at ${gradlew}.`);
@@ -546,3 +573,8 @@ await check("Installed Android APK lifecycle and UI", async () => {
 });
 
 await writeReport();
+// A browser driver or an npm.cmd child can leave a Windows pipe handle open
+// after its browser/process has already been closed. The report is fully
+// flushed above, so explicitly end this CLI instead of leaving CI or a local
+// release check hanging without further work to perform.
+process.exit(process.exitCode || 0);

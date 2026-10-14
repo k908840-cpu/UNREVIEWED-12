@@ -102,6 +102,15 @@ try {
     await installMock(page);
     await page.goto(`${APP_URL}/results`, { waitUntil: "domcontentloaded" });
 
+    // A restored path must never silently resume a game. The test exercises
+    // the real recovery path first, then verifies the rendered Results UI.
+    await waitFor(
+      page,
+      () => page.getByRole("button", { name: /^Resume Game$/i }).isVisible(),
+      `saved-game choice at ${viewport.width}x${viewport.height}`,
+    );
+    await page.getByRole("button", { name: /^Resume Game$/i }).click();
+
     const resultCard = page.getByText(/Delta called it!/i);
     await waitFor(page, () => resultCard.isVisible(), `Round Results card at ${viewport.width}x${viewport.height}`);
     await page.screenshot({ path: path.join(RESULTS, `${RUN_ID}-results-${viewport.width}x${viewport.height}.png`), fullPage: true });

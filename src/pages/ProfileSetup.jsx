@@ -58,7 +58,9 @@ export default function ProfileSetup() {
         const url = canvas.toDataURL("image/jpeg", 0.82);
         setPhoto(url); setTab("photo"); sfx.starSelect();
       };
-      img.src = e.target.result;
+      // FileReader can technically return an ArrayBuffer, but readAsDataURL
+      // guarantees a string. Keep the runtime guard for malformed events.
+      if (typeof e.target?.result === "string") img.src = e.target.result;
     };
     reader.readAsDataURL(file);
   };

@@ -27,8 +27,14 @@ async function installMock(page, { leaveFails = false } = {}) {
   const state = fixture();
   let leaveCalls = 0;
   await page.addInitScript(() => {
-    localStorage.setItem("unreviewed:session:v1", "alpha");
-    localStorage.setItem("unreviewed:room:v1", "SAVE");
+    // addInitScript runs on every document, including reloads. Seed once per
+    // browser context so the post-leave reload verifies the actual persisted
+    // state instead of putting the saved room back into localStorage.
+    if (!sessionStorage.getItem("unreviewed:qa:saved-room-seeded")) {
+      sessionStorage.setItem("unreviewed:qa:saved-room-seeded", "1");
+      localStorage.setItem("unreviewed:session:v1", "alpha");
+      localStorage.setItem("unreviewed:room:v1", "SAVE");
+    }
   });
   await page.route("**/api/**", async (route) => {
     const request = route.request();

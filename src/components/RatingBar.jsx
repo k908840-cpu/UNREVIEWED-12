@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 
 // Chunky animated rating bar (1–5 scale). Solid fill (no gradients).
-export default function RatingBar({ value = 0, max = 5, animate = true, delay = 0, className, barClassName, showValue = true, height = 22 }) {
+export default function RatingBar({ value = 0, max = 5, animate = true, delay = 0, className = "", barClassName = "", showValue = true, height = 22 }) {
   const pct = Math.max(0, Math.min(100, (value / max) * 100));
   const fill = value >= 4.5 ? "bg-amber-300" : value >= 3.5 ? "bg-amber-400" : value >= 2.5 ? "bg-orange-500" : value >= 1.5 ? "bg-rose-500" : "bg-red-700";
 
