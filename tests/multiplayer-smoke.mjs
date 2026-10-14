@@ -5,6 +5,13 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// This test drives four real browsers against a live Base44 deployment and
+// creates real rooms. It never runs implicitly.
+if (process.env.UNREVIEWED_QA_LIVE_MULTIPLAYER !== '1') {
+  console.error('Refusing to run: this test contacts the live Base44 backend. Set UNREVIEWED_QA_LIVE_MULTIPLAYER=1 to opt in.');
+  process.exit(2);
+}
+
 const APP_URL = process.env.UNREVIEWED_BASE_URL || 'https://rate-your-mates.base44.app';
 const CLEANUP_ROOM = process.env.UNREVIEWED_CLEANUP !== '0';
 const PLAYERS = ['Alpha', 'Bravo', 'Charlie', 'Delta'];

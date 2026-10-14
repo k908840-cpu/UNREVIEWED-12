@@ -11,7 +11,8 @@
  *   UNREVIEWED_ANDROID_AVD=<AVD name>     select an installed emulator
  *   UNREVIEWED_QA_PORT=<port>             local Vite preview port (default 4173)
  *   UNREVIEWED_BASE_URL=<url>             production target for multiplayer
- *   UNREVIEWED_QA_MULTIPLAYER=0           deliberately skip live room smoke
+ *   UNREVIEWED_QA_LIVE_MULTIPLAYER=1      OPT IN to the live four-player Base44 smoke test.
+ *                                         Without it the live backend is never contacted.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -493,6 +494,7 @@ for (const [label, script] of [
   ["Game reliability regression", "tests/game-reliability-regression.mjs"],
   ["Roster request regression", "tests/roster-request-regression.mjs"],
   ["Room backend regression", "tests/room-backend-regression.mjs"],
+  ["Live-test opt-in regression", "tests/live-test-optin-regression.mjs"],
   ["Room load simulation (four players, full game)", "tests/room-load-simulation.mjs"],
   ["Mobile layout regression", "tests/mobile-layout-regression.mjs"],
 ]) {
@@ -524,12 +526,13 @@ if (!playwrightAvailable) {
   } finally {
     await preview.stop();
   }
-  if (process.env.UNREVIEWED_QA_MULTIPLAYER === "0") {
-    await check("Live Base44 multiplayer room", async () => skip("Disabled by UNREVIEWED_QA_MULTIPLAYER=0. This is an explicit opt-out, not a pass."));
+  if (process.env.UNREVIEWED_QA_LIVE_MULTIPLAYER !== "1") {
+    await check("Live Base44 multiplayer room", async () => skip("Not run: the live four-player smoke test contacts the real Base44 backend and requires explicit opt-in (UNREVIEWED_QA_LIVE_MULTIPLAYER=1). This is a skip, not a pass."));
   } else {
     await check("Live Base44 multiplayer room", () => runNodeTest("live-multiplayer-smoke", "tests/multiplayer-smoke.mjs", {
       UNREVIEWED_BASE_URL: process.env.UNREVIEWED_BASE_URL || DEFAULT_LIVE_URL,
       UNREVIEWED_CLEANUP: "1",
+      UNREVIEWED_QA_LIVE_MULTIPLAYER: "1",
     }));
   }
 }

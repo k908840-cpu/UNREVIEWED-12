@@ -51,11 +51,20 @@ $env:UNREVIEWED_ANDROID_AVD = "Your AVD name"
 npm.cmd run test:android-qa
 ```
 
-`UNREVIEWED_QA_MULTIPLAYER=0` deliberately suppresses the real Base44 room
-smoke test for maintenance work. The report will mark that check as skipped and
-will keep the release gate blocked. The live test uses an isolated room and
-leaves it through the normal in-app Leave Game dialog; it never changes prompts,
-schemas, or existing rooms.
+The real Base44 four-player room smoke test is **opt-in**. By default
+`npm test` never contacts the live backend: the report marks that check as
+skipped (not passed) and keeps the release gate blocked. To run it deliberately:
+
+```powershell
+$env:UNREVIEWED_QA_LIVE_MULTIPLAYER = "1"
+npm.cmd run test:android-qa
+```
+
+`tests/multiplayer-smoke.mjs` refuses to start without the same variable, so it
+cannot be launched against production by accident. When opted in, the live test
+uses an isolated room and leaves it through the normal in-app Leave Game dialog;
+it never changes prompts, schemas, or existing rooms. Run it sparingly: it
+generates real room-function traffic.
 
 ## Manual checks that remain
 
