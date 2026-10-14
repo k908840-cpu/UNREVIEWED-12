@@ -37,6 +37,8 @@ const LOBBY_ROSTER_SYNC_MS = 10000;
 // Exponential backoff for rate-limit errors (ms).
 const BACKOFF_BASE_MS = 2000;
 const BACKOFF_MAX_MS = 30000;
+const BACKOFF_JITTER_RATIO = 0.2;
+const LEGACY_JOIN_ROSTER_STAGGER_MS = 750;
 
 // Detects rate-limit errors in either response data or thrown SDK errors.
 // A rate-limit error must NEVER be treated as not_found/gone.
@@ -100,6 +102,7 @@ export function GameProvider({ children }) {
   const roomPhaseRef = useRef("");
   const playersRef = useRef([]);
   const rosterDebounceRef = useRef(null);
+  const legacyJoinRosterTimerRef = useRef(null);
   const requestRosterRef = useRef(null);
   const rosterControllerRef = useRef(null);
   const lastRosterRequestRef = useRef({ code: "", at: 0 });
@@ -228,6 +231,7 @@ export function GameProvider({ children }) {
     answerSubmissionCoordinatorRef.current?.reset();
     predictionSubmissionCoordinatorRef.current?.reset();
     if (rosterDebounceRef.current) { clearTimeout(rosterDebounceRef.current); rosterDebounceRef.current = null; }
+    if (legacyJoinRosterTimerRef.current) { clearTimeout(legacyJoinRosterTimerRef.current); legacyJoinRosterTimerRef.current = null; }
     if (backoffTimerRef.current) { clearTimeout(backoffTimerRef.current); backoffTimerRef.current = null; }
     backoffRef.current = 0; rosterControllerRef.current?.invalidate();
     lastRosterRequestRef.current = { code: "", at: 0 };
@@ -516,8 +520,11 @@ export function GameProvider({ children }) {
     let initialHydrationRateLimited = false;
     let initialHydrationDefinitive = false;
     const handleRateLimit = () => {
-      const next = Math.min(backoffRef.current === 0 ? BACKOFF_BASE_MS : backoffRef.current * 2, BACKOFF_MAX_MS);
-      backoffRef.current = next;
+      const baseDelay = Math.min(backoffRef.current === 0 ? BACKOFF_BASE_MS : backoffRef.current * 2, BACKOFF_MAX_MS);
+      // Keep every client's retry bounded while desynchronizing their safe,
+      // read-only roster recovery after a shared provider rate limit.
+      const next = Math.round(baseDelay * (1 - BACKOFF_JITTER_RATIO / 2 + Math.random() * BACKOFF_JITTER_RATIO));
+      backoffRef.current = baseDelay;
       if (backoffTimerRef.current) clearTimeout(backoffTimerRef.current);
       backoffTimerRef.current = setTimeout(() => {
         backoffTimerRef.current = null;
@@ -887,8 +894,21 @@ export function GameProvider({ children }) {
     if (rosterPrimedRoomRef.current === roomCode) {
       rosterPrimedRoomRef.current = "";
       // A current backend returns the full roster from join. Only use the
-      // legacy reconciliation fallback if that snapshot was unavailable.
-      if (joinedRosterRoomRef.current !== roomCode) refreshPlayers({ reason: "legacy-join" });
+      // legacy reconciliation fallback if that snapshot was unavailable. A
+      // legacy backend can make several joining browsers hit this path at the
+      // same time, so guests use a short deterministic stagger rather than
+      // creating a getRoster burst. The host remains immediate and the normal
+      // debounced/single-flight/backoff path still owns the request itself.
+      if (joinedRosterRoomRef.current !== roomCode) {
+        const sessionOffset = [...sessionId].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 3;
+        const stagger = isHost ? 0 : sessionOffset * LEGACY_JOIN_ROSTER_STAGGER_MS;
+        const reconcile = () => {
+          legacyJoinRosterTimerRef.current = null;
+          refreshPlayers({ reason: "legacy-join" });
+        };
+        if (stagger === 0) reconcile();
+        else legacyJoinRosterTimerRef.current = setTimeout(reconcile, stagger);
+      }
     } else fetchRoster(undefined, "activation");
 
     const unsubRoom = base44.entities.Room.subscribe((e) => {
@@ -943,6 +963,7 @@ export function GameProvider({ children }) {
       clearTimeout(firstLobbySyncTimer);
       if (lobbySyncTimer) clearTimeout(lobbySyncTimer);
       if (rosterDebounceRef.current) { clearTimeout(rosterDebounceRef.current); rosterDebounceRef.current = null; }
+      if (legacyJoinRosterTimerRef.current) { clearTimeout(legacyJoinRosterTimerRef.current); legacyJoinRosterTimerRef.current = null; }
       if (backoffTimerRef.current) { clearTimeout(backoffTimerRef.current); backoffTimerRef.current = null; }
     };
   }, [roomCode, sessionId, fetchRoster, refreshPlayers, isHost]);

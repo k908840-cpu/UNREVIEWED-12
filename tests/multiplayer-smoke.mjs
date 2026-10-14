@@ -26,6 +26,10 @@ const route = (page) => new URL(page.url()).pathname.replace(/\/$/, '') || '/';
 const clean = (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 const isRoomRequest = (url) => /(?:\/functions\/room|\/api\/.*\/functions\/room)(?:[/?#]|$)/i.test(url);
 const ROOM_ACTIONS = new Set(['create', 'lookup', 'getRoster', 'join', 'heartbeat', 'leave', 'kick', 'config', 'start', 'submit_answer', 'submit_rating', 'submit_prediction', 'advance', 'reset_to_lobby', 'close']);
+const ROOM_MUTATION_ACTIONS = new Set(['create', 'join', 'leave', 'kick', 'config', 'start', 'submit_answer', 'submit_rating', 'submit_prediction', 'advance', 'reset_to_lobby', 'close']);
+const MUTATION_MIN_INTERVAL_MS = Math.max(500, Number.parseInt(process.env.UNREVIEWED_MUTATION_MIN_INTERVAL_MS || '1250', 10) || 1250);
+const requestStartedAt = new WeakMap();
+let lastMutationResponseAt = 0;
 
 function roomAction(request) {
   try {
@@ -83,6 +87,14 @@ async function clickEnabled(locator, description) {
   await locator.first().click();
 }
 
+// The smoke test drives a real shared Base44 room. Keep test-issued mutations
+// deliberately serial and give the provider a small recovery window between
+// completed writes; this does not alter app behavior or retry a failed write.
+async function waitForRoomMutationSlot(action) {
+  const earliest = lastMutationResponseAt + MUTATION_MIN_INTERVAL_MS;
+  await waitUntil(() => Date.now() >= earliest, `${action} Base44 mutation slot`, Math.max(TIMEOUT, MUTATION_MIN_INTERVAL_MS + 5_000));
+}
+
 async function waitForRoute(pages, expected, description) {
   await waitUntil(() => pages.every((page) => route(page) === expected), description);
 }
@@ -127,6 +139,8 @@ function observe(page, player) {
   });
   page.on('request', (request) => {
     if (!isRoomRequest(request.url())) return;
+    const startedAtMs = Date.now();
+    requestStartedAt.set(request, startedAtMs);
     const event = {
       sequence: ++roomEventSequence,
       player,
@@ -134,7 +148,7 @@ function observe(page, player) {
       action: roomAction(request),
       clientReason: roomClientReason(request),
       method: request.method(),
-      at: new Date().toISOString(),
+      at: new Date(startedAtMs).toISOString(),
     };
     roomRequests.push(event);
   });
@@ -144,6 +158,7 @@ function observe(page, player) {
     try { body = (await response.text()).slice(0, 2_000); } catch { body = '<response body unavailable>'; }
     const summary = roomResponseSummary(body);
     const action = roomAction(response.request());
+    const respondedAtMs = Date.now();
     const event = {
       sequence: ++roomEventSequence,
       player,
@@ -155,9 +170,11 @@ function observe(page, player) {
       phase: summary.phase,
       outcome: response.ok() && !summary.error ? 'success' : 'failure',
       error: summary.error,
-      at: new Date().toISOString(),
+      durationMs: Math.max(0, respondedAtMs - (requestStartedAt.get(response.request()) || respondedAtMs)),
+      at: new Date(respondedAtMs).toISOString(),
     };
     roomRequests.push(event);
+    if (ROOM_MUTATION_ACTIONS.has(action)) lastMutationResponseAt = Math.max(lastMutationResponseAt, respondedAtMs);
     if (!response.ok()) {
       failedRoomRequests.push({ ...event, type: 'http-error', url: response.url(), statusText: response.statusText(), body });
     }
@@ -227,6 +244,7 @@ async function submitProfile(page, nickname) {
   if ((await input.inputValue()) !== nickname || !await submit.isEnabled()) {
     await profileStateFailure(page, nickname, pendingCode, 'nickname or button state changed before submit');
   }
+  await waitForRoomMutationSlot('join');
   try {
     await submit.click({ timeout: 5_000 });
   } catch (error) {
@@ -239,9 +257,11 @@ async function createRoomAsAlpha(page) {
   await clickEnabled(page.getByRole('button', { name: /^Play$/ }), 'landing Play button');
   await waitForRoute([page], '/create', 'Create/Join screen');
   // CreateJoin.jsx host card: heading "Create a Room".
+  await waitForRoomMutationSlot('create');
   await clickEnabled(page.getByRole('button', { name: /^Create a Room/ }), 'Create a Room card');
   await waitForRoute([page], '/config', 'Host Configuration screen');
   // HostConfig.jsx uses the exact literal "Let's go" (not "Let's go!").
+  await waitForRoomMutationSlot('config');
   await clickEnabled(page.getByRole('button', { name: /^Let's go$/i }), "Host Configuration Let's go button");
   await submitProfile(page, 'Alpha');
 }
@@ -262,6 +282,7 @@ async function joinRoom(page, nickname, roomCode) {
   const codeInput = page.getByPlaceholder('ABCD');
   await codeInput.fill(roomCode);
   await waitUntil(async () => (await codeInput.inputValue()) === roomCode, `${nickname}'s room-code value`);
+  await waitForRoomMutationSlot('lookup');
   await clickEnabled(page.getByRole('button', { name: /^Join Room$/ }), `${nickname}'s Create/Join Join Room button`);
   await submitProfile(page, nickname);
 }
@@ -346,6 +367,7 @@ async function submitAnswers(pages) {
   for (const { index, editor } of writers) {
     await editor.fill(`Round one smoke review from ${PLAYERS[index]}.`);
     const eventSequenceBeforeClick = roomEventSequence;
+    await waitForRoomMutationSlot('submit_answer');
     await clickEnabled(pages[index].getByRole('button', { name: /^Submit$/ }), `${PLAYERS[index]}'s Submit button`);
     await waitForAnswerAcceptance(pages[index], index, eventSequenceBeforeClick);
   }
@@ -394,6 +416,7 @@ async function rateRound(pages) {
     assert.equal(raters.length, 2, `answer ${answer} should have two eligible raters`);
     for (const { index, stars } of raters) {
       const eventSequenceBeforeClick = roomEventSequence;
+      await waitForRoomMutationSlot('submit_rating');
       await clickEnabled(stars.getByRole('button', { name: '5 stars' }), `${PLAYERS[index]}'s five-star rating`);
       await waitForRatingAcceptance(pages[index], index, eventSequenceBeforeClick);
     }
@@ -423,6 +446,7 @@ async function finishRoundAndEnterRoundTwo(pages) {
   await screenshot(pages, 'prediction');
   // Prediction.jsx labels its cards A, B, C. Select card A by that rendered marker.
   await clickEnabled(firstPredictionChoice, 'first prediction choice');
+  await waitForRoomMutationSlot('submit_prediction');
   await clickEnabled(pages[subjectIndex].getByRole('button', { name: /Lock it in/i }), 'Lock it in button');
   await waitForRoute(pages, '/results', 'Round Results');
   await screenshot(pages, 'round-results');
@@ -430,6 +454,7 @@ async function finishRoundAndEnterRoundTwo(pages) {
   await waitForRoute(pages, '/leaderboard', 'first-round Leaderboard');
   await waitForLeaderboardReady(pages);
   await screenshot(pages, 'round-one-leaderboard');
+  await waitForRoomMutationSlot('advance');
   await clickEnabled(pages[0].getByRole('button', { name: /^Next Round/ }), 'Next Round button');
   await waitForRoute(pages, '/reveal', 'Round 2 subject reveal');
   await waitForRoundTwoReveal(pages);
@@ -443,6 +468,24 @@ async function writeArtifacts(summary) {
     writeFile(path.join(RESULTS, `${RUN_ID}-room-requests.json`), `${JSON.stringify(roomRequests, null, 2)}\n`),
     writeFile(path.join(RESULTS, `${RUN_ID}-failed-room-requests.json`), `${JSON.stringify(failedRoomRequests, null, 2)}\n`),
   ]);
+}
+
+function summarizeRoomRequests() {
+  const requests = roomRequests.filter((event) => event.type === 'request');
+  const responses = roomRequests.filter((event) => event.type === 'response');
+  const byAction = Object.fromEntries([...new Set(requests.map((event) => event.action))]
+    .sort()
+    .map((action) => [action, {
+      requests: requests.filter((event) => event.action === action).length,
+      failures: responses.filter((event) => event.action === action && event.outcome === 'failure').length,
+      durationsMs: responses.filter((event) => event.action === action).map((event) => event.durationMs),
+    }]));
+  return {
+    totalRequests: requests.length,
+    failedResponses: responses.filter((event) => event.outcome === 'failure').length,
+    mutationMinIntervalMs: MUTATION_MIN_INTERVAL_MS,
+    byAction,
+  };
 }
 
 // The smoke test creates a real, isolated room. Leave it through the same
@@ -461,6 +504,7 @@ async function leaveTestRoom(pages) {
       await exit.click({ timeout: 3_000 });
       const confirm = page.getByRole('button', { name: /^Leave Game$/i });
       await waitUntil(async () => await visible(confirm) && await confirm.isEnabled(), `${PLAYERS[index]}'s Leave Game confirmation`, 5_000);
+      await waitForRoomMutationSlot('leave');
       await confirm.click({ timeout: 3_000 });
       await waitUntil(() => route(page) === '/', `${PLAYERS[index]} to leave the test room`, 10_000);
     } catch (error) {
@@ -499,7 +543,11 @@ try {
   });
 
   await step('join Bravo, Charlie, and Delta', async () => {
-    await Promise.all(pages.slice(1).map((page, index) => joinRoom(page, PLAYERS[index + 1], roomCode)));
+    // Sequential UI joins avoid turning an isolated smoke room into a synthetic
+    // three-client write burst while still exercising four independent contexts.
+    for (let index = 1; index < pages.length; index += 1) {
+      await joinRoom(pages[index], PLAYERS[index], roomCode);
+    }
   });
 
   await step('verify four-player synchronization', async () => {
@@ -508,6 +556,7 @@ try {
   });
 
   await step('start game as host', async () => {
+    await waitForRoomMutationSlot('start');
     await clickEnabled(pages[0].getByRole('button', { name: /^Start Game$/ }), 'Start Game button');
     await waitForRoute(pages, '/reveal', 'all players to reach the first subject reveal');
     await waitUntil(() => visible(pages[0].getByText('Please review responsibly.', { exact: true })), 'complete subject reveal');
@@ -537,6 +586,7 @@ try {
     status: failure ? 'failed' : 'passed', startedAt, completedAt: new Date().toISOString(), appUrl: APP_URL,
     roomCode, players: PLAYERS, lastStep: currentStep,
     failure: failure ? { message: failure.message, stack: failure.stack } : null,
+    requestMetrics: summarizeRoomRequests(),
     artifacts: { screenshots, consoleErrors, roomRequests, failedRoomRequests, cleanupErrors },
   };
   await writeArtifacts(summary);

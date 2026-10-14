@@ -5,6 +5,9 @@ import pluginReactHooks from "eslint-plugin-react-hooks";
 import pluginUnusedImports from "eslint-plugin-unused-imports";
 
 export default [
+  // Capacitor/Gradle output is regenerated from the web build and can include
+  // third-party bridge code with rules this project does not install.
+  { ignores: ["android/**", "dist/**", "test-results/**"] },
   {
     files: [
       "src/components/**/*.{js,mjs,cjs,jsx}",

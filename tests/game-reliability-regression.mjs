@@ -243,6 +243,8 @@ async function duplicateManualNextRoundDoesNotQueueTwice() {
 }
 
 async function rateLimitedAnswerIsReconciledBeforeRetrying() {
+  const scheduler = createScheduler();
+  let now = 0;
   let submitCalls = 0;
   let successfulAnswers = 0;
   let reconcileCalls = 0;
@@ -255,17 +257,34 @@ async function rateLimitedAnswerIsReconciledBeforeRetrying() {
     },
     reconcile: async () => {
       reconcileCalls += 1;
-      // The first verification is itself rate-limited. The next retry must
-      // reconcile again before sending a second mutation.
+      // The first safe verification is itself rate-limited. The next bounded
+      // reconciliation must run before sending a second mutation.
       if (reconcileCalls === 1) return { error: 'Rate limit exceeded', ambiguous: true };
       return { accepted: false };
     },
+    schedule: scheduler.schedule,
+    cancel: scheduler.cancel,
+    now: () => now,
+    random: () => 0.5,
+    reconciliationRetryDelays: [10, 20],
   });
 
   const first = await coordinator.submit('A careful answer');
   assert.equal(first.accepted, undefined);
   assert.equal(first.retryable, true);
   assert.equal(submitCalls, 1);
+  assert.equal(reconcileCalls, 0, 'a rate-limited write must not trigger an immediate extra getRoster request');
+
+  const tooSoon = await coordinator.submit('A careful answer');
+  assert.equal(tooSoon.error, 'submission_reconciliation_pending');
+  assert.equal(submitCalls, 1, 'a pending safe reconciliation must block a duplicate mutation');
+
+  now += 10;
+  await scheduler.advanceBy(10);
+  assert.equal(reconcileCalls, 1);
+  now += 20;
+  await scheduler.advanceBy(20);
+  assert.equal(reconcileCalls, 2);
 
   const retry = await coordinator.submit('A careful answer');
   assert.equal(retry.accepted, true);
@@ -293,6 +312,8 @@ async function ambiguousAnswerResponseDoesNotDuplicate() {
 }
 
 async function persistedPredictionIsAcceptedAfterAnHttp500() {
+  const scheduler = createScheduler();
+  let now = 0;
   let submitCalls = 0;
   let reconciliationCalls = 0;
   const coordinator = createAnswerSubmissionCoordinator({
@@ -305,13 +326,21 @@ async function persistedPredictionIsAcceptedAfterAnHttp500() {
       reconciliationCalls += 1;
       return { accepted: answerId === 'answer-a', room: { game_state: { prediction: 'answer-a' } } };
     },
+    schedule: scheduler.schedule,
+    cancel: scheduler.cancel,
+    now: () => now,
+    random: () => 0.5,
+    reconciliationRetryDelays: [10],
   });
 
   const result = await coordinator.submit('answer-a');
-  assert.equal(result.accepted, true);
-  assert.equal(result.reconciled, true);
-  assert.equal(result.acceptedPayload, 'answer-a');
+  assert.equal(result.accepted, undefined);
+  assert.equal(result.retryable, true);
   assert.equal(submitCalls, 1);
+  assert.equal(reconciliationCalls, 0, 'a rate-limited write must cool down before its safe read-only reconciliation');
+
+  now += 10;
+  await scheduler.advanceBy(10);
   assert.equal(reconciliationCalls, 1);
 
   const repeated = await coordinator.submit('answer-a');
@@ -332,6 +361,10 @@ async function smokeTestWaitsForRenderedLeaderboardAndRoundTwoContent() {
   assert.ok(smoke.includes("page.getByRole('heading', { name: /^LEADERBOARD$/i })"));
   assert.match(smoke, /async function waitForRoundTwoReveal/);
   assert.match(smoke, /new Set\(subjectNames\)\.size === 1/);
+  assert.match(smoke, /const MUTATION_MIN_INTERVAL_MS/);
+  assert.match(smoke, /await waitForRoomMutationSlot\('submit_answer'\)/);
+  assert.match(smoke, /for \(let index = 1; index < pages\.length; index \+= 1\)/,
+    'the controlled smoke run must join independent clients without a parallel join burst');
 }
 
 await duplicateDeadlineCallbacksAreCoalesced();
