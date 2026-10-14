@@ -285,6 +285,11 @@ async function handle(req) {
         if (!room || room.status !== 'playing') return Response.json({ error: 'not_found' }, { status: 404 });
         const gs = room.game_state;
         if (!gs || gs.phase !== 'writing') return Response.json({ error: 'wrong_phase' }, { status: 400 });
+        // Authorization: only a current member of this room may act. The roster
+        // is read before any write (it is also the eligibility/presence read the
+        // later steps use, so this adds no extra request).
+        const players = await playersOf(room.code);
+        if (!players.some((p) => p.session_id === sessionId)) return Response.json({ error: 'not_in_room' }, { status: 403 });
         if (sessionId === gs.current_subject) return Response.json({ error: 'is_subject' }, { status: 403 });
         const text = String(body.text || '').slice(0, 80).trim();
         if (!text) return Response.json({ error: 'empty' }, { status: 400 });
@@ -293,7 +298,6 @@ async function handle(req) {
         const newAnswer = { id: rid(), author: sessionId, text };
         await Room.updateMany({ id: room.id }, { $push: { 'game_state.answers': newAnswer } });
         const updated = await findRoom(room.code);
-        const players = await playersOf(room.code);
         const presenceRecorded = await refreshPresence(players);
         const refreshed = players.map((p) => p.session_id === sessionId ? { ...p, last_seen: nowIso, connected: true } : p);
         const reRoom = await tryAdvance(base44, Room, updated, refreshed, now);
@@ -305,6 +309,11 @@ async function handle(req) {
         if (!room || room.status !== 'playing') return Response.json({ error: 'not_found' }, { status: 404 });
         const gs = room.game_state;
         if (!gs || gs.phase !== 'rating') return Response.json({ error: 'wrong_phase' }, { status: 400 });
+        // Authorization: only a current member of this room may act. The roster
+        // is read before any write (it is also the eligibility/presence read the
+        // later steps use, so this adds no extra request).
+        const players = await playersOf(room.code);
+        if (!players.some((p) => p.session_id === sessionId)) return Response.json({ error: 'not_in_room' }, { status: 403 });
         const answerId = String(body.answer_id || '');
         const stars = Math.max(1, Math.min(5, Math.round(Number(body.stars) || 0)));
         if (stars < 1 || stars > 5) return Response.json({ error: 'invalid_rating' }, { status: 400 });
@@ -318,7 +327,6 @@ async function handle(req) {
         const ratingKey = `game_state.ratings.${answerId}.${sessionId}`;
         await Room.updateMany({ id: room.id }, { $set: { [ratingKey]: stars } });
         const updated = await findRoom(room.code);
-        const players = await playersOf(room.code);
         const presenceRecorded = await refreshPresence(players);
         const refreshed = players.map((p) => p.session_id === sessionId ? { ...p, last_seen: nowIso, connected: true } : p);
         const reRoom = await tryAdvance(base44, Room, updated, refreshed, now);
@@ -330,6 +338,11 @@ async function handle(req) {
         if (!room || room.status !== 'playing') return Response.json({ error: 'not_found' }, { status: 404 });
         const gs = room.game_state;
         if (!gs || gs.phase !== 'prediction') return Response.json({ error: 'wrong_phase' }, { status: 400 });
+        // Authorization: only a current member of this room may act. The roster
+        // is read before any write (it is also the eligibility/presence read the
+        // later steps use, so this adds no extra request).
+        const players = await playersOf(room.code);
+        if (!players.some((p) => p.session_id === sessionId)) return Response.json({ error: 'not_in_room' }, { status: 403 });
         if (sessionId !== gs.current_subject) return Response.json({ error: 'not_subject' }, { status: 403 });
         const answerId = String(body.answer_id || '');
         if (!(gs.answers || []).some((a) => a.id === answerId)) return Response.json({ error: 'invalid_answer' }, { status: 400 });
@@ -342,7 +355,6 @@ async function handle(req) {
         }
         await Room.updateMany({ id: room.id }, { $set: { 'game_state.prediction': answerId } });
         const updated = await findRoom(room.code);
-        const players = await playersOf(room.code);
         const presenceRecorded = await refreshPresence(players);
         const refreshed = players.map((p) => p.session_id === sessionId ? { ...p, last_seen: nowIso, connected: true } : p);
         const reRoom = await tryAdvance(base44, Room, updated, refreshed, now);
@@ -358,6 +370,10 @@ async function handle(req) {
           return Response.json({ room, advanced: false, stale: true });
         }
         const players = await playersOf(room.code);
+        // Only members may advance the game, including the any-player "continue"
+        // force on reveal/results/leaderboard. Checked after the stale-request
+        // early return and using the roster already read here, so it adds no request.
+        if (!players.some((p) => p.session_id === sessionId)) return Response.json({ error: 'not_in_room' }, { status: 403 });
         const isHost = room.host_session === sessionId;
         const force = body.force === true;
         const activeIds = new Set(activePlayers(players, now).map((p) => p.session_id));

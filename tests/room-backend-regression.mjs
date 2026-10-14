@@ -188,10 +188,6 @@ async function submitActionsPersistPresenceAndSayso() {
   res = await call(writers[1], { action: 'submit_answer', code, text: 'second' });
   assert.equal(res.data.presence_recorded, true);
 
-  // Non-members cannot be reported as present.
-  clock += 1000;
-  res = await call('s-stranger', { action: 'submit_answer', code, text: 'hi' });
-  assert.equal(res.data.presence_recorded, false, 'a session that is not in the room must never be reported as present');
 }
 
 async function submitPathsStillAdvanceAndScoreOnTheServer() {
@@ -230,6 +226,92 @@ async function submitPathsStillAdvanceAndScoreOnTheServer() {
   assert.equal(Object.values(room(code).game_state.scores).reduce((a, b) => a + b, 0), total, 'a retried submit must never score twice');
 }
 
+// ------------------------------------------------------- authorization
+const snapshot = (code) => JSON.stringify(room(code));
+
+async function nonMembersCannotSubmitOrAdvance() {
+  const code = await lobby();
+  let gs = await enterWriting(code);
+  const subject = gs.current_subject;
+  const writers = SESSIONS.filter((s) => s !== subject);
+  const outsider = 's-outsider';
+
+  const expectBlocked = async (label, sessionId, body) => {
+    const before = snapshot(code);
+    fake.resetOps();
+    const res = await call(sessionId, { code, ...body });
+    assert.equal(res.status, 403, `${label}: expected 403, got ${res.status} ${JSON.stringify(res.data)}`);
+    assert.equal(res.data.error, 'not_in_room', label);
+    assert.equal(snapshot(code), before, `${label}: room state must not change`);
+    assert.equal(fake.entityOps['Room.updateMany'], undefined, `${label}: must not write to the room`);
+    assert.equal(fake.entityOps['Room.update'], undefined, `${label}: must not write to the room`);
+  };
+
+  // Writing phase.
+  await expectBlocked('outsider submit_answer', outsider, { action: 'submit_answer', text: 'sneaky' });
+  assert.equal(room(code).game_state.answers.length, 0, 'an outsider answer must never be stored');
+
+  // A player who was removed mid-game is no longer a member either.
+  const gone = writers[0];
+  fake.tables.RoomPlayer = fake.tables.RoomPlayer.filter((p) => p.session_id !== gone);
+  await expectBlocked('removed player submit_answer', gone, { action: 'submit_answer', text: 'ghost' });
+
+  // Members continue to work: the remaining two writers fill the phase.
+  const remaining = writers.filter((w) => w !== gone);
+  for (const w of remaining) { clock += 1250; const r = await call(w, { action: 'submit_answer', code, text: `by ${w}` }); assert.equal(r.status, 200, JSON.stringify(r.data)); }
+  assert.equal(room(code).game_state.answers.length, 2);
+
+  // Force-advance of a visual "continue" phase is members-only too.
+  gs = room(code).game_state;
+  const phaseBefore = gs.phase;
+  await expectBlocked('outsider force advance', outsider, { action: 'advance', force: true, expected_phase: phaseBefore, expected_round: gs.round_index });
+  await expectBlocked('outsider auto advance', outsider, { action: 'advance' });
+}
+
+async function nonMembersCannotRateOrPredict() {
+  const code = await lobby();
+  let gs = await enterWriting(code);
+  const subject = gs.current_subject;
+  const writers = SESSIONS.filter((s) => s !== subject);
+  for (const w of writers) { clock += 1250; await call(w, { action: 'submit_answer', code, text: `by ${w}` }); }
+  gs = room(code).game_state;
+  assert.equal(gs.phase, 'rating');
+
+  const expectBlocked = async (label, sessionId, body) => {
+    const before = snapshot(code);
+    const res = await call(sessionId, { code, ...body });
+    assert.equal(res.status, 403, `${label}: expected 403, got ${res.status} ${JSON.stringify(res.data)}`);
+    assert.equal(res.data.error, 'not_in_room', label);
+    assert.equal(snapshot(code), before, `${label}: room state must not change`);
+  };
+
+  const answer = gs.answers[gs.rating_index];
+  await expectBlocked('outsider submit_rating', 's-outsider', { action: 'submit_rating', answer_id: answer.id, stars: 1 });
+  assert.equal(room(code).game_state.ratings?.[answer.id]?.['s-outsider'], undefined, 'an outsider rating must never be stored');
+
+  // A removed rater is blocked even though they were eligible before.
+  const rater = writers.find((w) => w !== answer.author);
+  const removedRow = structuredClone(fake.tables.RoomPlayer.find((p) => p.session_id === rater));
+  fake.tables.RoomPlayer = fake.tables.RoomPlayer.filter((p) => p.session_id !== rater);
+  await expectBlocked('removed player submit_rating', rater, { action: 'submit_rating', answer_id: answer.id, stars: 5 });
+
+  // Test setup only: put the member back (joining a running game is rejected by design),
+  // then drive to the prediction phase with the real flow.
+  fake.tables.RoomPlayer.push(removedRow);
+  for (let i = 0; i < 3; i += 1) {
+    const a = room(code).game_state.answers[i];
+    for (const r of writers.filter((w) => w !== a.author)) { clock += 1250; await call(r, { action: 'submit_rating', code, answer_id: a.id, stars: 5 }); }
+  }
+  gs = room(code).game_state;
+  assert.equal(gs.phase, 'prediction');
+
+  await expectBlocked('outsider submit_prediction', 's-outsider', { action: 'submit_prediction', answer_id: gs.answers[0].id });
+  // The subject loses membership: their session id alone must not be enough.
+  fake.tables.RoomPlayer = fake.tables.RoomPlayer.filter((p) => p.session_id !== subject);
+  await expectBlocked('removed subject submit_prediction', subject, { action: 'submit_prediction', answer_id: gs.answers[0].id });
+  assert.equal(room(code).game_state.prediction ?? null, null, 'no prediction may be stored for a non-member');
+}
+
 const tests = [
   presenceTrackerOnlyTrustsServerConfirmedActions,
   normalHeartbeatCostsTwoReadsAndOneWrite,
@@ -238,6 +320,8 @@ const tests = [
   heartbeatStillMigratesAStaleHostOnlyAfterTheGraceWindow,
   submitActionsPersistPresenceAndSayso,
   submitPathsStillAdvanceAndScoreOnTheServer,
+  nonMembersCannotSubmitOrAdvance,
+  nonMembersCannotRateOrPredict,
 ];
 let failed = 0;
 for (const test of tests) {
