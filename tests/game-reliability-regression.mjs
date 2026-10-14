@@ -171,11 +171,17 @@ function heartbeatKeepsPresenceAndMigratesOnlyAfterTheReconnectWindow() {
 }
 
 async function normalHeartbeatAvoidsRedundantEntityReads() {
+  // Exact entity-operation counts and the removal / closure / migration
+  // outcomes are verified against the real handler in
+  // tests/room-backend-regression.mjs. These structural checks keep the
+  // guarantees this test always protected.
   const entry = await readFile(path.join(ROOT, 'base44/functions/room/entry.ts'), 'utf8');
   const heartbeat = entry.slice(entry.indexOf("case 'heartbeat':"), entry.indexOf("case 'leave':"));
-  assert.equal((heartbeat.match(/findRoom\(/g) || []).length, 2, 'a heartbeat must retain one post-write Room validation but no final redundant reread');
-  assert.equal((heartbeat.match(/playersOf\(/g) || []).length, 2, 'a heartbeat must retain post-write membership validation but no final redundant reread');
-  assert.match(heartbeat, /const freshPlayers = currentPlayers\.map/, 'the caller must be included as fresh before host migration');
+  assert.match(heartbeat, /if \(!me\) return Response\.json\(\{ error: 'not_in_room' \}/, 'membership must be validated before the presence write');
+  assert.match(heartbeat, /catch \(error\)[\s\S]*?error: 'gone'[\s\S]*?error: 'not_in_room'/, 'a failed presence write must re-validate the room and membership before reporting an error');
+  const afterWrite = heartbeat.slice(heartbeat.indexOf('const freshPlayers'));
+  assert.doesNotMatch(afterWrite, /findRoom\(|playersOf\(/, 'a successful heartbeat must not reread the room or roster after the write');
+  assert.match(heartbeat, /const freshPlayers = players\.map/, 'the caller must be included as fresh before host migration');
   assert.match(heartbeat, /selectActiveHost\(freshPlayers, now, HOST_MIGRATION_GRACE_MS\)/, 'host migration must keep using the 60-second grace window');
 }
 

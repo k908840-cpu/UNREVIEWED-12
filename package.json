@@ -11,6 +11,8 @@
     "typecheck": "tsc -p ./jsconfig.json",
     "preview": "vite preview",
     "test:android-qa": "node tests/android-qa.mjs",
+    "test:room-backend": "node tests/room-backend-regression.mjs",
+    "test:room-load": "node tests/room-load-simulation.mjs",
     "test": "node tests/android-qa.mjs"
   },
   "dependencies": {

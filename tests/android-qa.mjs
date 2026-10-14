@@ -492,6 +492,8 @@ for (const [label, script] of [
   ["Saved-room recovery regression", "tests/saved-room-recovery-regression.mjs"],
   ["Game reliability regression", "tests/game-reliability-regression.mjs"],
   ["Roster request regression", "tests/roster-request-regression.mjs"],
+  ["Room backend regression", "tests/room-backend-regression.mjs"],
+  ["Room load simulation (four players, full game)", "tests/room-load-simulation.mjs"],
   ["Mobile layout regression", "tests/mobile-layout-regression.mjs"],
 ]) {
   await check(label, () => runNodeTest(label, script));

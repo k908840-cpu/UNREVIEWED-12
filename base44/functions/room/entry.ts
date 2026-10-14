@@ -30,6 +30,24 @@ async function handle(req) {
       return list[0] || null;
     };
     const playersOf = async (code) => await Player.filter({ room_code: code });
+    // A game action proves the player is connected. Persisting that lets the
+    // client skip a redundant standalone heartbeat invocation. Reports whether
+    // a fresh presence record is stored; the client only skips heartbeats when
+    // it is told so (presence_recorded), so an undeployed backend or a failed
+    // write simply keeps the normal heartbeat cadence.
+    const PRESENCE_REFRESH_MS = 5000;
+    const refreshPresence = async (players) => {
+      const me = players.find((p) => p.session_id === sessionId);
+      if (!me) return false;
+      const age = now - (Date.parse(me.last_seen || '') || 0);
+      if (me.connected !== false && age >= 0 && age < PRESENCE_REFRESH_MS) return true;
+      try {
+        await Player.update(me.id, { connected: true, last_seen: nowIso });
+        return true;
+      } catch {
+        return false;
+      }
+    };
     const displayRoster = (players) => players.map((p) => ({
       session_id: p.session_id, nickname: p.nickname, avatar_id: p.avatar_id,
       photo_url: p.photo_url, is_host: p.is_host, connected: p.connected, last_seen: p.last_seen,
@@ -113,47 +131,73 @@ async function handle(req) {
         const me = players.find((p) => p.session_id === sessionId);
         if (!me) return Response.json({ error: 'not_in_room' }, { status: 404 });
 
-        // Keep the post-write room and membership validation: a player can be
-        // removed or a room closed while this heartbeat is in flight. The
-        // final reread after a possible host update was redundant, however.
-        await Player.update(me.id, { connected: true, last_seen: nowIso });
-
-        const currentRoom = await findRoom(room.code);
-        if (!currentRoom || currentRoom.status === 'closed') return Response.json({ error: 'gone' }, { status: 404 });
-        const currentPlayers = await playersOf(currentRoom.code);
-        if (!currentPlayers.some((p) => p.session_id === sessionId)) {
+        // Common path: 2 reads + 1 write. Membership and room status were
+        // validated by the reads immediately above, so the write is not
+        // followed by a second room+roster read. If the player was removed or
+        // the room closed in the meantime, the update fails (or returns
+        // nothing); only then is the state re-read to report the right error.
+        let written = null;
+        try {
+          written = await Player.update(me.id, { connected: true, last_seen: nowIso });
+        } catch (error) {
+          written = null;
+          const recheckRoom = await findRoom(room.code);
+          if (!recheckRoom || recheckRoom.status === 'closed') return Response.json({ error: 'gone' }, { status: 404 });
+          const recheckPlayers = await playersOf(recheckRoom.code);
+          if (!recheckPlayers.some((p) => p.session_id === sessionId)) {
+            return Response.json({ error: 'not_in_room' }, { status: 404 });
+          }
+          throw error;
+        }
+        if (!written) {
+          const recheckRoom = await findRoom(room.code);
+          if (!recheckRoom || recheckRoom.status === 'closed') return Response.json({ error: 'gone' }, { status: 404 });
           return Response.json({ error: 'not_in_room' }, { status: 404 });
         }
 
-        const freshPlayers = currentPlayers.map((player) => player.id === me.id
+        const freshPlayers = players.map((player) => player.id === me.id
           ? { ...player, connected: true, last_seen: nowIso }
           : player);
-        let hostSession = currentRoom.host_session;
+        let hostSession = room.host_session;
         const currentHost = freshPlayers.find((p) => p.session_id === hostSession);
         if (!isActive(currentHost, now, HOST_MIGRATION_GRACE_MS)) {
           const next = selectActiveHost(freshPlayers, now, HOST_MIGRATION_GRACE_MS);
           if (next && next.session_id !== hostSession) {
             // Concurrent stale-host heartbeats select the same deterministic
             // replacement. Room.host_session remains the source of truth.
-            await Room.update(currentRoom.id, { host_session: next.session_id });
+            await Room.update(room.id, { host_session: next.session_id });
             hostSession = next.session_id;
           }
         }
 
-        if (hostSession !== currentRoom.host_session) {
-          const currentHost = freshPlayers.find((p) => p.session_id === hostSession);
-          if (currentHost && !currentHost.is_host) await Player.update(currentHost.id, { is_host: true });
+        if (hostSession !== room.host_session) {
+          const newHost = freshPlayers.find((p) => p.session_id === hostSession);
+          if (newHost && !newHost.is_host) await Player.update(newHost.id, { is_host: true });
           const stale = freshPlayers.find((p) => p.is_host && p.session_id !== hostSession);
           if (stale) await Player.update(stale.id, { is_host: false });
         }
 
-        return Response.json({
+        const rosterIds = freshPlayers.map((p) => p.session_id);
+        const response: Record<string, unknown> = {
           ok: true,
           build: BACKEND_BUILD_ID,
           host_session: hostSession,
           active_session_ids: activePlayers(freshPlayers, now).map((p) => p.session_id),
-          roster_session_ids: freshPlayers.map((p) => p.session_id),
-        });
+          roster_session_ids: rosterIds,
+        };
+        // Lobby only: when the caller says which members it already knows and
+        // that differs from the server, return the roster now. The client can
+        // apply it directly instead of sending a follow-up getRoster request.
+        // Nothing is added when the caller's roster is current, so steady-state
+        // heartbeats stay small.
+        if (room.status === 'lobby' && Array.isArray(body.known_roster_ids)) {
+          const known = new Set(body.known_roster_ids.filter((id) => typeof id === 'string').slice(0, 64));
+          const differs = known.size !== rosterIds.length || rosterIds.some((id) => !known.has(id));
+          if (differs) {
+            response.players = displayRoster(freshPlayers.map((p) => ({ ...p, is_host: p.session_id === hostSession })));
+          }
+        }
+        return Response.json(response);
       }
 
       case 'leave': {
@@ -250,9 +294,10 @@ async function handle(req) {
         await Room.updateMany({ id: room.id }, { $push: { 'game_state.answers': newAnswer } });
         const updated = await findRoom(room.code);
         const players = await playersOf(room.code);
+        const presenceRecorded = await refreshPresence(players);
         const refreshed = players.map((p) => p.session_id === sessionId ? { ...p, last_seen: nowIso, connected: true } : p);
         const reRoom = await tryAdvance(base44, Room, updated, refreshed, now);
-        return Response.json({ room: reRoom });
+        return Response.json({ room: reRoom, presence_recorded: presenceRecorded });
       }
 
       case 'submit_rating': {
@@ -274,9 +319,10 @@ async function handle(req) {
         await Room.updateMany({ id: room.id }, { $set: { [ratingKey]: stars } });
         const updated = await findRoom(room.code);
         const players = await playersOf(room.code);
+        const presenceRecorded = await refreshPresence(players);
         const refreshed = players.map((p) => p.session_id === sessionId ? { ...p, last_seen: nowIso, connected: true } : p);
         const reRoom = await tryAdvance(base44, Room, updated, refreshed, now);
-        return Response.json({ room: reRoom });
+        return Response.json({ room: reRoom, presence_recorded: presenceRecorded });
       }
 
       case 'submit_prediction': {
@@ -297,9 +343,10 @@ async function handle(req) {
         await Room.updateMany({ id: room.id }, { $set: { 'game_state.prediction': answerId } });
         const updated = await findRoom(room.code);
         const players = await playersOf(room.code);
+        const presenceRecorded = await refreshPresence(players);
         const refreshed = players.map((p) => p.session_id === sessionId ? { ...p, last_seen: nowIso, connected: true } : p);
         const reRoom = await tryAdvance(base44, Room, updated, refreshed, now);
-        return Response.json({ room: reRoom });
+        return Response.json({ room: reRoom, presence_recorded: presenceRecorded });
       }
 
       case 'advance': {

@@ -15,6 +15,7 @@ import { createRosterRequestController, isRosterRequestTimeout } from "./rosterR
 import { saveRoomConfig } from "./saveRoomConfig";
 import { classifySavedRoomResponse, isCurrentSavedRoomRecovery } from "./savedRoomRecovery";
 import { noteBackendBuild } from "@/lib/build-info";
+import { createPresenceTracker } from "./presenceTracker";
 
 const GameContext = createContext(null);
 
@@ -101,6 +102,9 @@ export function GameProvider({ children }) {
   const roomStatusRef = useRef("");
   const roomPhaseRef = useRef("");
   const playersRef = useRef([]);
+  // Confirmed-presence tracker: lets the heartbeat skip a redundant invocation
+  // right after a game action that the server recorded as presence.
+  const presenceTrackerRef = useRef(createPresenceTracker());
   const rosterDebounceRef = useRef(null);
   const legacyJoinRosterTimerRef = useRef(null);
   const requestRosterRef = useRef(null);
@@ -632,6 +636,9 @@ export function GameProvider({ children }) {
     try {
       const res = await base44.functions.invoke("room", { action, sessionId, code: roomCode, ...extra });
       const data = res?.data || {};
+      // Only a successful response the server flagged as presence_recorded
+      // counts; an older backend never sets it, so heartbeats are unchanged.
+      presenceTrackerRef.current.record(action, data);
       if (data.room) {
         roomStatusRef.current = data.room.status || roomStatusRef.current;
         roomPhaseRef.current = data.room.game_state?.phase || roomPhaseRef.current;
@@ -860,6 +867,27 @@ export function GameProvider({ children }) {
       }
     };
 
+    // In the lobby the heartbeat response carries the roster when this
+    // client's known membership was stale. Applying it directly replaces a
+    // follow-up getRoster request. Anything unusual (no roster, self missing,
+    // join hydration pending) returns false and uses the existing path.
+    const applyHeartbeatRoster = (data) => {
+      if (!Array.isArray(data?.players)) return false;
+      if (roomStatusRef.current !== "lobby") return false;
+      if (activeRoomCodeRef.current !== roomCode) return false;
+      if (initialJoinHydrationRoomRef.current === roomCode) return false;
+      if (typeof data.host_session !== "string") return false;
+      const activeIds = Array.isArray(data.active_session_ids) ? new Set(data.active_session_ids) : null;
+      const mapped = data.players.map((rp) => {
+        const player = mapPlayer(rp, sessionId, data.host_session);
+        return activeIds ? { ...player, connected: activeIds.has(player.sessionId) } : player;
+      });
+      if (!mapped.some((player) => player.isYou)) return false;
+      seenSelfRef.current = true;
+      setPlayers(mapped);
+      return true;
+    };
+
     const reconcileHeartbeat = (data) => {
       syncHostSession(data?.host_session);
 
@@ -884,7 +912,7 @@ export function GameProvider({ children }) {
             // remove a departed player locally without the roster polling
             // that previously caused rate-limit storms during gameplay.
             setPlayers((current) => removeDepartedPlayers(current, data.roster_session_ids));
-          } else {
+          } else if (!applyHeartbeatRoster(data)) {
             requestRosterReconciliation();
           }
         }
@@ -926,8 +954,15 @@ export function GameProvider({ children }) {
     });
 
     const beat = async () => {
+      // A recent submit_* response already recorded this player's presence on
+      // the server, so a standalone heartbeat would only add traffic.
+      if (presenceTrackerRef.current.shouldSkipHeartbeat()) return;
       try {
-        const res = await base44.functions.invoke("room", { action: "heartbeat", code: roomCode, sessionId });
+        const res = await base44.functions.invoke("room", {
+          action: "heartbeat", code: roomCode, sessionId,
+          // Lets the server return the roster only when this client's view is stale.
+          known_roster_ids: playersRef.current.map((player) => player.sessionId).filter(Boolean),
+        });
         noteBackendBuild(res);
         if (active) reconcileHeartbeat(res?.data || {});
       } catch {}
