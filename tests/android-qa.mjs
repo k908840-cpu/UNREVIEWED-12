@@ -487,6 +487,7 @@ await check("Type check", async () => {
 });
 
 for (const [label, script] of [
+  ["Base44 function response regression", "tests/base44-function-response-regression.mjs"],
   ["Background audio regression", "tests/background-audio-regression.mjs"],
   ["Writing audio regression", "tests/writing-audio-regression.mjs"],
   ["Quit Game regression", "tests/quit-game-regression.mjs"],

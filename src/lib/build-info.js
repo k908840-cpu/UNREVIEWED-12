@@ -2,6 +2,7 @@
 // id, a build timestamp, and the backend revision this bundle expects.
 // @ts-ignore -- shared with the Deno backend, which requires the .ts extension
 import { BACKEND_BUILD_ID, BACKEND_BUILD_HEADER } from "../../base44/shared/build.ts";
+import { normalizeFunctionResponse } from "../api/functionResponse.js";
 
 /* global __APP_BUILD__ */
 // @ts-ignore -- injected by vite `define` (vite.config.js)
@@ -19,7 +20,7 @@ const diag = { frontend: FRONTEND_BUILD, expectedBackend: EXPECTED_BACKEND_BUILD
 // or the response header). Never throws.
 export function noteBackendBuild(res) {
   try {
-    const reported = res?.data?.build
+    const reported = normalizeFunctionResponse(res).build
       || res?.headers?.[BACKEND_BUILD_HEADER]
       || res?.headers?.get?.(BACKEND_BUILD_HEADER);
     if (typeof reported === "string" && reported && reported !== diag.backend) {

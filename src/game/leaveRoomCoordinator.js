@@ -1,3 +1,5 @@
+import { functionErrorCode } from "../api/functionResponse.js";
+
 // Keeps a deliberate Leave Game action single-flight.  A failed request leaves
 // local room state intact so a refresh or retry cannot silently abandon a
 // participant who is still present on the authoritative backend.
@@ -17,7 +19,7 @@ export function createLeaveRoomCoordinator({ send, onSuccess = () => {} }) {
         return { ok: true };
       } catch (error) {
         return {
-          error: error?.response?.data?.error || error?.message || "leave_failed",
+          error: functionErrorCode(error) || error?.message || "leave_failed",
           retryable: true,
         };
       }

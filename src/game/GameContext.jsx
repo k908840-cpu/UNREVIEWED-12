@@ -17,6 +17,7 @@ import { saveRoomConfig } from "./saveRoomConfig";
 import { classifySavedRoomResponse, isCurrentSavedRoomRecovery } from "./savedRoomRecovery";
 import { noteBackendBuild } from "@/lib/build-info";
 import { createPresenceTracker } from "./presenceTracker";
+import { functionErrorCode, functionErrorData, functionErrorStatus, normalizeFunctionResponse } from "@/api/functionResponse";
 
 const GameContext = createContext(null);
 
@@ -45,7 +46,7 @@ const LEGACY_JOIN_ROSTER_STAGGER_MS = 750;
 // Detects rate-limit errors in either response data or thrown SDK errors.
 // A rate-limit error must NEVER be treated as not_found/gone.
 const isRateLimited = (data, err) => {
-  const msg = (typeof data === "string" ? data : data?.error) || err?.response?.data?.error || err?.message || "";
+  const msg = (typeof data === "string" ? data : data?.error) || functionErrorCode(err) || err?.message || "";
   return /rate limit/i.test(msg);
 };
 const rid = () => Math.random().toString(36).slice(2, 9);
@@ -251,7 +252,7 @@ export function GameProvider({ children }) {
   // ---- lobby actions (unchanged) ----
   const createRoom = useCallback(async () => {
     const res = await base44.functions.invoke("room", { action: "create", sessionId, mode, length });
-    const data = res?.data || {};
+    const data = normalizeFunctionResponse(res);
     const created = data.room;
     if (!created) throw new Error("create_failed");
     if (typeof data.membership_capability !== "string" || !data.membership_capability) {
@@ -275,7 +276,7 @@ export function GameProvider({ children }) {
     try {
       const res = await base44.functions.invoke("room", { action: "lookup", code, sessionId });
       noteBackendBuild(res);
-      const data = res?.data || {};
+      const data = normalizeFunctionResponse(res);
       if (data.error) return { error: data.error };
       if (data.room.status === "playing") return { error: "in_progress" };
       if (data.room.status === "closed") return { error: "closed" };
@@ -290,7 +291,7 @@ export function GameProvider({ children }) {
       return { ok: true, room: data.room, roomCode: data.room.code };
     } catch (e) {
       if (isRateLimited(null, e)) return { error: "rate_limited" };
-      const error = e?.response?.data?.error;
+      const error = functionErrorCode(e);
       if (["not_found", "closed", "in_progress", "full"].includes(error)) return { error };
       return { error: "request_failed" };
     }
@@ -302,7 +303,7 @@ export function GameProvider({ children }) {
       action: "getRoster", code, sessionId, membership_capability: membershipCapability, client_reason: clientReason,
     });
     noteBackendBuild(res);
-    return res?.data || {};
+    return normalizeFunctionResponse(res);
   }, [sessionId]);
   requestRosterRef.current = requestRoster;
 
@@ -316,7 +317,7 @@ export function GameProvider({ children }) {
         ...(existingCapability ? { membership_capability: existingCapability } : {}),
         nickname, avatar_id: avatar?.id || "", photo_url: photo || "",
       });
-      const data = res?.data || {};
+      const data = normalizeFunctionResponse(res);
       if (data.error) throw new Error(data.error);
       const membershipCapability = data.membership_capability || existingCapability;
       if (typeof membershipCapability !== "string" || !membershipCapability) {
@@ -364,7 +365,7 @@ export function GameProvider({ children }) {
       setPhase("lobby");
       return { ok: true };
     } catch (e) {
-      throw new Error(e?.response?.data?.error || e?.message || "join_failed");
+      throw new Error(functionErrorCode(e) || e?.message || "join_failed");
     }
   }, [sessionId, pendingRoomCode]);
 
@@ -385,7 +386,15 @@ export function GameProvider({ children }) {
   }, [roomCode, pendingRoomCode, sessionId]);
 
   const kickPlayer = useCallback(async (targetSession) => {
-    try { await base44.functions.invoke("room", { action: "kick", code: roomCode, sessionId, membership_capability: getRoomMembershipCapability(roomCode), target_session: targetSession }); } catch {}
+    try {
+      const res = await base44.functions.invoke("room", {
+        action: "kick", code: roomCode, sessionId,
+        membership_capability: getRoomMembershipCapability(roomCode), target_session: targetSession,
+      });
+      return normalizeFunctionResponse(res);
+    } catch (error) {
+      return { error: functionErrorCode(error) || error?.message || "kick_failed" };
+    }
   }, [roomCode, sessionId]);
 
   const requestLeaveRoom = useCallback(async (requestedRoomCode = roomCode) => {
@@ -396,16 +405,16 @@ export function GameProvider({ children }) {
     try {
       const res = await base44.functions.invoke("room", { action: "leave", code, sessionId, membership_capability: getRoomMembershipCapability(code) });
       noteBackendBuild(res);
-      const data = res?.data || {};
+      const data = normalizeFunctionResponse(res);
       if (data.error) {
         console.warn("[UNREVIEWED] leave request failed", { error: data.error, retryable: isRateLimited(data) });
         return { ...data, retryable: isRateLimited(data) };
       }
       return data.ok === true ? { ok: true } : { error: "leave_failed", retryable: true };
     } catch (e) {
-      const status = Number(e?.response?.status) || null;
+      const status = functionErrorStatus(e);
       const failure = {
-        error: e?.response?.data?.error || e?.message || "leave_failed",
+        error: functionErrorCode(e) || e?.message || "leave_failed",
         status,
         retryable: status === null || status === 429 || status >= 500,
       };
@@ -482,7 +491,7 @@ export function GameProvider({ children }) {
       return { ok: true };
     } catch (error) {
       if (!isCurrent()) return { error: "resume_cancelled" };
-      const reason = error?.response?.data?.error || error?.message || "resume_unavailable";
+      const reason = functionErrorCode(error) || error?.message || "resume_unavailable";
       if (["not_found", "closed", "not_in_room"].includes(reason)) {
         resetRoomState();
         navigate("/", { replace: true });
@@ -495,10 +504,13 @@ export function GameProvider({ children }) {
 
   const endRoom = useCallback(async () => {
     try {
-      if (roomCode) await base44.functions.invoke("room", {
-        action: "close", code: roomCode, sessionId,
-        membership_capability: getRoomMembershipCapability(roomCode),
-      });
+      if (roomCode) {
+        const res = await base44.functions.invoke("room", {
+          action: "close", code: roomCode, sessionId,
+          membership_capability: getRoomMembershipCapability(roomCode),
+        });
+        normalizeFunctionResponse(res);
+      }
     } catch {}
     resetRoomState();
   }, [roomCode, sessionId, resetRoomState]);
@@ -662,7 +674,7 @@ export function GameProvider({ children }) {
       const res = await base44.functions.invoke("room", {
         action, sessionId, code: roomCode, membership_capability: membershipCapability, ...extra,
       });
-      const data = res?.data || {};
+      const data = normalizeFunctionResponse(res);
       // Only a successful response the server flagged as presence_recorded
       // counts; an older backend never sets it, so heartbeats are unchanged.
       presenceTrackerRef.current.record(action, data);
@@ -680,9 +692,9 @@ export function GameProvider({ children }) {
       }
       return data;
     } catch (e) {
-      const status = Number(e?.response?.status) || null;
+      const status = functionErrorStatus(e);
       return {
-        error: e?.response?.data?.error || e?.message || "error",
+        error: functionErrorCode(e) || e?.message || "error",
         status,
         retryable: status === null || status === 429 || status >= 500,
         ambiguous: status === null || status === 429 || status >= 500,
@@ -698,7 +710,7 @@ export function GameProvider({ children }) {
       const res = await base44.functions.invoke("room", {
         action: "start", code: roomCode, sessionId, membership_capability: membershipCapability,
       });
-      const data = res?.data || {};
+      const data = normalizeFunctionResponse(res);
       if (data.error) return { error: data.error, active: data.active };
       if (data.room) {
         roomStatusRef.current = data.room.status || roomStatusRef.current;
@@ -707,9 +719,9 @@ export function GameProvider({ children }) {
       }
       return { ok: true };
     } catch (e) {
-      const error = e?.response?.data?.error || "start_failed";
+      const error = functionErrorCode(e) || "start_failed";
       if (error === "forbidden") await refreshPlayers({ force: true });
-      return { error, active: e?.response?.data?.active };
+      return { error, active: functionErrorData(e).active };
     }
   }, [roomCode, sessionId]);
 
@@ -732,7 +744,7 @@ export function GameProvider({ children }) {
       return { accepted: roomHasMyAnswer(data.room), room: data.room };
     } catch (e) {
       return {
-        error: e?.response?.data?.error || e?.message || "reconciliation_failed",
+        error: functionErrorCode(e) || e?.message || "reconciliation_failed",
         ambiguous: true,
       };
     }
@@ -757,7 +769,7 @@ export function GameProvider({ children }) {
       return { accepted: roomHasPrediction(data.room, answerId), room: data.room };
     } catch (e) {
       return {
-        error: e?.response?.data?.error || e?.message || "reconciliation_failed",
+        error: functionErrorCode(e) || e?.message || "reconciliation_failed",
         ambiguous: true,
       };
     }
@@ -855,7 +867,7 @@ export function GameProvider({ children }) {
         action: "reset_to_lobby", code: roomCode, sessionId, membership_capability: membershipCapability,
       });
       noteBackendBuild(res);
-      const data = res?.data || {};
+      const data = normalizeFunctionResponse(res);
       if (data.error) return data;
       if (!data.room) return { error: "reset_failed" };
       roomStatusRef.current = data.room.status || "lobby";
@@ -863,7 +875,7 @@ export function GameProvider({ children }) {
       setRoom(data.room);
       return { ok: true };
     } catch (e) {
-      return { error: e?.response?.data?.error || e?.message || "reset_failed" };
+      return { error: functionErrorCode(e) || e?.message || "reset_failed" };
     }
   }, [roomCode, sessionId, isHost]);
 
@@ -1006,7 +1018,7 @@ export function GameProvider({ children }) {
           known_roster_ids: playersRef.current.map((player) => player.sessionId).filter(Boolean),
         });
         noteBackendBuild(res);
-        if (active) reconcileHeartbeat(res?.data || {});
+        if (active) reconcileHeartbeat(normalizeFunctionResponse(res));
       } catch {}
     };
     // Joining already records a fresh, connected player. Defer and stagger
@@ -1145,7 +1157,7 @@ export function GameProvider({ children }) {
         navigate("/", { replace: true });
       } catch (e) {
         if (!isCurrent()) return;
-        const error = e?.response?.data?.error;
+        const error = functionErrorCode(e);
         if (["not_found", "closed", "not_in_room"].includes(error)) invalidateSavedRoom();
         else {
           setResumeOfferState({ code, status: "unavailable", error: error || e?.message || "resume_unavailable" });

@@ -8,24 +8,32 @@ import { fillPrompt } from '../src/lib/promptText.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (file) => readFile(path.join(ROOT, file), 'utf8');
-const httpError = (status, error) => Object.assign(new Error(`HTTP ${status}`), { response: { status, data: error ? { error } : {} } });
+const httpError = (status, error) => Object.assign(new Error(`HTTP ${status}`), { status, data: error ? { error } : {} });
 const noSleep = () => Promise.resolve();
 const base = { code: 'ABCD', sessionId: 's1', membershipCapability: 'capability', mode: 'adult', length: 'standard', sleep: noSleep };
 
 async function savedModeIsConfirmedBeforeContinuing() {
   const calls = [];
-  const invoke = async (name, payload) => { calls.push({ name, payload }); return { data: { room: { code: 'ABCD', mode: payload.mode, length: payload.length } } }; };
+  const invoke = async (name, payload) => { calls.push({ name, payload }); return { room: { code: 'ABCD', mode: payload.mode, length: payload.length } }; };
   const result = await saveRoomConfig({ ...base, invoke });
   assert.equal(result.ok, true);
   assert.equal(result.room.mode, 'adult');
   assert.deepEqual(calls[0], { name: 'room', payload: { action: 'config', code: 'ABCD', sessionId: 's1', membership_capability: 'capability', mode: 'adult', length: 'standard' } });
 }
 
+async function wrappedSdkResponseRemainsSupported() {
+  const result = await saveRoomConfig({
+    ...base,
+    invoke: async () => ({ data: { room: { code: 'ABCD', mode: 'adult', length: 'standard' } } }),
+  });
+  assert.equal(result.ok, true, 'the compatibility normalizer retains support for the historical wrapper');
+}
+
 async function transientFailureIsRetriedThenSucceeds() {
   let n = 0;
   const invoke = async () => {
     if (++n === 1) throw httpError(500, 'Rate limit exceeded');
-    return { data: { room: { mode: 'adult', length: 'standard' } } };
+    return { room: { mode: 'adult', length: 'standard' } };
   };
   const result = await saveRoomConfig({ ...base, invoke });
   assert.equal(result.ok, true);
@@ -51,9 +59,9 @@ async function serverRefusalsAndUnconfirmedSavesFail() {
   const started = await saveRoomConfig({ ...base, invoke: async () => { throw httpError(409, 'in_progress'); } });
   assert.equal(started.error, 'in_progress');
   // 200 response that stored a different mode (e.g. stale server) is NOT success.
-  const wrongMode = await saveRoomConfig({ ...base, invoke: async () => ({ data: { room: { mode: 'family', length: 'standard' } } }) });
+  const wrongMode = await saveRoomConfig({ ...base, invoke: async () => ({ room: { mode: 'family', length: 'standard' } }) });
   assert.deepEqual([wrongMode.ok, wrongMode.error], [false, 'config_not_saved']);
-  const noRoom = await saveRoomConfig({ ...base, invoke: async () => ({ data: {} }) });
+  const noRoom = await saveRoomConfig({ ...base, invoke: async () => ({}) });
   assert.equal(noRoom.ok, false);
   const missingCode = await saveRoomConfig({ ...base, code: '', invoke: async () => { throw new Error('should not be called'); } });
   assert.deepEqual([missingCode.ok, missingCode.error], [false, 'no_room']);
@@ -105,6 +113,7 @@ async function androidConnectionIsUntouched() {
 }
 
 await savedModeIsConfirmedBeforeContinuing();
+await wrappedSdkResponseRemainsSupported();
 await transientFailureIsRetriedThenSucceeds();
 await persistentFailureIsReportedNotSwallowed();
 await serverRefusalsAndUnconfirmedSavesFail();

@@ -1,3 +1,5 @@
+import { functionErrorCode, functionErrorStatus, normalizeFunctionResponse } from "../api/functionResponse.js";
+
 // Persists the host's chosen mode/length to the room and confirms the server
 // stored exactly what was asked. Returns { ok: true, room } or { ok: false, error };
 // it never throws and never reports success for an unconfirmed save, so callers
@@ -7,7 +9,7 @@ export const CONFIG_SAVE_ATTEMPTS = 2;
 export const CONFIG_RETRY_DELAY_MS = 600;
 
 const isTransient = (e) => {
-  const status = Number(e?.response?.status);
+  const status = functionErrorStatus(e);
   return !status || status === 429 || status >= 500;
 };
 
@@ -30,7 +32,7 @@ export async function saveRoomConfig({
       const res = await invoke("room", {
         action: "config", code, sessionId, membership_capability: membershipCapability, mode, length,
       });
-      const data = res?.data || {};
+      const data = normalizeFunctionResponse(res);
       if (data.error) {
         lastError = data.error;
         break; // an explicit server refusal (forbidden, in_progress, ...) will not change on retry
@@ -39,7 +41,7 @@ export async function saveRoomConfig({
       if (saved && saved.mode === mode && saved.length === length) return { ok: true, room: saved };
       lastError = "config_not_saved";
     } catch (e) {
-      lastError = e?.response?.data?.error || "config_failed";
+      lastError = functionErrorCode(e) || "config_failed";
       if (!isTransient(e)) break;
     }
     if (attempt < attempts) await sleep(delayMs);
